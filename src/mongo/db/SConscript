@@ -19,6 +19,7 @@ env.SConscript(
         'pipeline',
         'query',
         'repl',
+        's',
         'sorter',
         'stats',
         'storage',
@@ -42,10 +43,9 @@ env.Library(
     ],
     LIBDEPS=[
         '$BUILD_DIR/mongo/bson/bson',
-        '$BUILD_DIR/mongo/util/foundation',
         '$BUILD_DIR/mongo/db/index_names',
-        '$BUILD_DIR/mongo/db/service_context',
-    ],
+        '$BUILD_DIR/mongo/util/foundation',
+    ]
 )
 
 env.CppUnitTest(
@@ -140,12 +140,10 @@ env.Library(
     ],
     LIBDEPS=[
         '$BUILD_DIR/mongo/bson/mutable/mutable_bson',
-        '$BUILD_DIR/mongo/db/commands/server_status_core',
         '$BUILD_DIR/mongo/db/concurrency/lock_manager',
-        '$BUILD_DIR/mongo/db/stats/top',
+        '$BUILD_DIR/mongo/db/service_context',
         '$BUILD_DIR/mongo/util/fail_point',
         '$BUILD_DIR/mongo/util/net/network',
-        '$BUILD_DIR/mongo/db/service_context',
         '$BUILD_DIR/mongo/util/progress_meter',
     ],
 )
@@ -387,6 +385,7 @@ env.Library(
     source=[
         'client.cpp',
         'client_basic.cpp',
+        'operation_context.cpp',
         'service_context.cpp',
         'service_context_noop.cpp',
     ],
@@ -398,7 +397,7 @@ env.Library(
 )
 
 env.Library(
-    tagret='lasterror',
+    target='lasterror',
     source=[
         "lasterror.cpp",
     ],
@@ -408,9 +407,7 @@ env.Library(
     ],
 )
 
-coredbEnv = env.Clone()
-coredbEnv.InjectThirdPartyIncludePaths(libraries=['snappy'])
-coredbEnv.Library(
+env.Library(
     target="coredb",
     source=[
         "audit.cpp",
@@ -429,33 +426,7 @@ coredbEnv.Library(
         "commands/parameters.cpp",
         "commands/user_management_commands_common.cpp",
         "commands/write_commands/write_commands_common.cpp",
-        "pipeline/pipeline.cpp",
         "dbcommands_generic.cpp",
-        "matcher/matcher.cpp",
-        "pipeline/accumulator_add_to_set.cpp",
-        "pipeline/accumulator_avg.cpp",
-        "pipeline/accumulator_first.cpp",
-        "pipeline/accumulator_last.cpp",
-        "pipeline/accumulator_min_max.cpp",
-        "pipeline/accumulator_push.cpp",
-        "pipeline/accumulator_sum.cpp",
-        "pipeline/dependencies.cpp",
-        "pipeline/document_source.cpp",
-        "pipeline/document_source_bson_array.cpp",
-        "pipeline/document_source_command_shards.cpp",
-        "pipeline/document_source_geo_near.cpp",
-        "pipeline/document_source_group.cpp",
-        "pipeline/document_source_limit.cpp",
-        "pipeline/document_source_match.cpp",
-        "pipeline/document_source_merge_cursors.cpp",
-        "pipeline/document_source_out.cpp",
-        "pipeline/document_source_project.cpp",
-        "pipeline/document_source_redact.cpp",
-        "pipeline/document_source_skip.cpp",
-        "pipeline/document_source_sort.cpp",
-        "pipeline/document_source_unwind.cpp",
-        "pipeline/expression.cpp",
-        "stats/timer_stats.cpp",
     ],
     LIBDEPS=[
         '$BUILD_DIR/mongo/client/clientdriver',
@@ -464,7 +435,6 @@ coredbEnv.Library(
         '$BUILD_DIR/mongo/util/cmdline_utils/cmdline_utils',
         '$BUILD_DIR/mongo/util/foundation',
         '$BUILD_DIR/mongo/util/processinfo',
-        '$BUILD_DIR/third_party/shim_snappy',
         'auth/serverauth',
         'commands/server_status_core',
         'common',
@@ -475,11 +445,11 @@ coredbEnv.Library(
         'matcher/expressions',
         'matcher/expressions_geo',
         'matcher/expressions_text',
-        'pipeline/document_value',
         'server_options',
         'server_parameters',
         'startup_warnings_common',
         'stats/counters',
+        'stats/timer_stats',
     ],
 )
 
@@ -516,10 +486,9 @@ serverOnlyFiles = [
     "commands/compact.cpp",
     "commands/copydb.cpp",
     "commands/copydb_start_commands.cpp",
-    "commands/count.cpp",
+    "commands/count_cmd.cpp",
     "commands/create_indexes.cpp",
     "commands/current_op.cpp",
-    "commands/cursor_responses.cpp",
     "commands/dbhash.cpp",
     "commands/distinct.cpp",
     "commands/drop_indexes.cpp",
@@ -533,6 +502,7 @@ serverOnlyFiles = [
     "commands/group.cpp",
     "commands/index_filter_commands.cpp",
     "commands/kill_op.cpp",
+    "commands/killcursors_cmd.cpp",
     "commands/list_collections.cpp",
     "commands/list_databases.cpp",
     "commands/list_indexes.cpp",
@@ -544,6 +514,7 @@ serverOnlyFiles = [
     "commands/plan_cache_commands.cpp",
     "commands/rename_collection.cpp",
     "commands/repair_cursor.cpp",
+    "commands/snapshot_management.cpp",
     "commands/test_commands.cpp",
     "commands/top_command.cpp",
     "commands/touch.cpp",
@@ -552,6 +523,7 @@ serverOnlyFiles = [
     "commands/write_commands/batch_executor.cpp",
     "commands/write_commands/write_commands.cpp",
     "commands/writeback_compatibility_shim.cpp",
+    "curop_metrics.cpp",
     "db_raii.cpp",
     "dbcommands.cpp",
     "dbdirectclient.cpp",
@@ -587,7 +559,6 @@ serverOnlyFiles = [
     "range_deleter_db_env.cpp",
     "range_deleter_service.cpp",
     "repair_database.cpp",
-    "repl/bgsync.cpp",
     "repl/initial_sync.cpp",
     "repl/master_slave.cpp",
     "repl/minvalid.cpp",
@@ -597,7 +568,6 @@ serverOnlyFiles = [
     "repl/replication_info.cpp",
     "repl/resync.cpp",
     "repl/rs_initialsync.cpp",
-    "repl/rs_rollback.cpp",
     "repl/rs_sync.cpp",
     "repl/sync_source_feedback.cpp",
     "service_context_d.cpp",
@@ -620,17 +590,18 @@ if has_option('use-cpu-profiler'):
     # scope it more narrowly. Better would be if the commands were a library, and could be
     # conditionally made to depend on this file, as a library and then we could easily scope
     # just to this file.
-    env.InjectThirdPartyIncludePaths('tcmalloc')
+    env.InjectThirdPartyIncludePaths('gperftools')
 
 serveronlyEnv = env.Clone()
 serveronlyEnv.InjectThirdPartyIncludePaths(libraries=['snappy'])
 serveronlyLibdeps = [
     "$BUILD_DIR/mongo/client/parallel",
+    "$BUILD_DIR/mongo/executor/network_interface_factory",
     "$BUILD_DIR/mongo/s/batch_write_types",
     "$BUILD_DIR/mongo/s/catalog/legacy/catalog_manager_legacy",
+    "$BUILD_DIR/mongo/s/catalog/replset/catalog_manager_replica_set",
     "$BUILD_DIR/mongo/s/client/sharding_connection_hook",
     "$BUILD_DIR/mongo/s/coreshard",
-    "$BUILD_DIR/mongo/s/metadata",
     "$BUILD_DIR/mongo/s/serveronly",
     "$BUILD_DIR/mongo/scripting/scripting_server",
     "$BUILD_DIR/mongo/util/elapsed_tracker",
@@ -649,18 +620,23 @@ serveronlyLibdeps = [
     "global_timestamp",
     "index/index_descriptor",
     "ops/update_driver",
+    "pipeline/document_source",
+    "pipeline/pipeline",
     "query/query",
     "range_deleter",
-    "repl/network_interface_impl",
+    "repl/bgsync",
     "repl/repl_coordinator_global",
     "repl/repl_coordinator_impl",
     "repl/repl_settings",
     "repl/replication_executor",
     "repl/replication_executor",
     "repl/replset_commands",
+    "repl/rs_rollback",
     "repl/rslog",
     "repl/sync_tail",
     "repl/topology_coordinator_impl",
+    "s/metadata",
+    "s/sharding",
     "startup_warnings_mongod",
     "stats/counters",
     "stats/top",

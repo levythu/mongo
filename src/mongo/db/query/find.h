@@ -31,140 +31,114 @@
 #include <string>
 
 #include "mongo/db/clientcursor.h"
-#include "mongo/db/curop.h"
 #include "mongo/db/dbmessage.h"
+#include "mongo/db/operation_context.h"
 #include "mongo/db/query/canonical_query.h"
 #include "mongo/util/net/message.h"
 
 namespace mongo {
 
-    class OperationContext;
+class NamespaceString;
+class OperationContext;
 
-    class ScopedRecoveryUnitSwapper {
-    public:
-        ScopedRecoveryUnitSwapper(ClientCursor* cc, OperationContext* txn);
+/**
+ * Returns true if enough results have been prepared to stop adding more to the first batch.
+ *
+ * Should be called *after* adding to the result set rather than before.
+ */
+bool enoughForFirstBatch(const LiteParsedQuery& pq, long long numDocs, int bytesBuffered);
 
-        ~ScopedRecoveryUnitSwapper();
+/**
+ * Returns true if enough results have been prepared to stop adding more to a getMore batch.
+ *
+ * Should be called *after* adding to the result set rather than before.
+ */
+bool enoughForGetMore(long long ntoreturn, long long numDocs, int bytesBuffered);
 
-        /**
-         * Dismissing the RU swapper causes it to simply free the recovery unit rather than swapping
-         * it back into the ClientCursor.
-         */
-        void dismiss();
+/**
+ * Whether or not the ClientCursor* is tailable.
+ */
+bool isCursorTailable(const ClientCursor* cursor);
 
-    private:
-        ClientCursor* _cc;
-        OperationContext* _txn;
-        bool _dismissed;
+/**
+ * Whether or not the ClientCursor* has the awaitData flag set.
+ */
+bool isCursorAwaitData(const ClientCursor* cursor);
 
-        std::unique_ptr<RecoveryUnit> _txnPreviousRecoveryUnit;
-        OperationContext::RecoveryUnitState _txnPreviousRecoveryUnitState;
-    };
+/**
+ * Returns true if we should keep a cursor around because we're expecting to return more query
+ * results.
+ *
+ * If false, the caller should close the cursor and indicate this to the client by sending back
+ * a cursor ID of 0.
+ */
+bool shouldSaveCursor(OperationContext* txn,
+                      const Collection* collection,
+                      PlanExecutor::ExecState finalState,
+                      PlanExecutor* exec);
 
-    /**
-     * Returns true if enough results have been prepared to stop adding more to the first batch.
-     *
-     * Should be called *after* adding to the result set rather than before.
-     */
-    bool enoughForFirstBatch(const LiteParsedQuery& pq, int numDocs, int bytesBuffered);
+/**
+ * Similar to shouldSaveCursor(), but used in getMore to determine whether we should keep
+ * the cursor around for additional getMores().
+ *
+ * If false, the caller should close the cursor and indicate this to the client by sending back
+ * a cursor ID of 0.
+ */
+bool shouldSaveCursorGetMore(PlanExecutor::ExecState finalState,
+                             PlanExecutor* exec,
+                             bool isTailable);
 
-    /**
-     * Returns true if enough results have been prepared to stop adding more to a getMore batch.
-     *
-     * Should be called *after* adding to the result set rather than before.
-     */
-    bool enoughForGetMore(int ntoreturn, int numDocs, int bytesBuffered);
+/**
+ * Fills out the CurOp for "txn" with information about this query.
+ */
+void beginQueryOp(OperationContext* txn,
+                  const NamespaceString& nss,
+                  const BSONObj& queryObj,
+                  long long ntoreturn,
+                  long long ntoskip);
 
-    /**
-     * Whether or not the ClientCursor* is tailable.
-     */
-    bool isCursorTailable(const ClientCursor* cursor);
+/**
+ * Fills out CurOp for "txn" with information regarding this query's execution.
+ *
+ * Uses explain functionality to extract stats from 'exec'.
+ *
+ * The database profiling level, 'dbProfilingLevel', is used to conditionalize whether or not we
+ * do expensive stats gathering.
+ */
+void endQueryOp(OperationContext* txn,
+                const PlanExecutor& exec,
+                int dbProfilingLevel,
+                long long numResults,
+                CursorId cursorId);
 
-    /**
-     * Whether or not the ClientCursor* has the awaitData flag set.
-     */
-    bool isCursorAwaitData(const ClientCursor* cursor);
+/**
+ * Constructs a PlanExecutor for a query with the oplogReplay option set to true,
+ * for the query 'cq' over the collection 'collection'. The PlanExecutor will
+ * wrap a singleton OplogStart stage.
+ *
+ * The oplog start finding hack requires that 'cq' has a $gt or $gte predicate over
+ * a field named 'ts'.
+ */
+StatusWith<std::unique_ptr<PlanExecutor>> getOplogStartHack(OperationContext* txn,
+                                                            Collection* collection,
+                                                            std::unique_ptr<CanonicalQuery> cq);
 
-    /**
-     * Returns true if we should keep a cursor around because we're expecting to return more query
-     * results.
-     *
-     * If false, the caller should close the cursor and indicate this to the client by sending back
-     * a cursor ID of 0.
-     */
-    bool shouldSaveCursor(OperationContext* txn,
-                          const Collection* collection,
-                          PlanExecutor::ExecState finalState,
-                          PlanExecutor* exec);
+/**
+ * Called from the getMore entry point in ops/query.cpp.
+ */
+QueryResult::View getMore(OperationContext* txn,
+                          const char* ns,
+                          int ntoreturn,
+                          long long cursorid,
+                          bool* exhaust,
+                          bool* isCursorAuthorized);
 
-    /**
-     * Similar to shouldSaveCursor(), but used in getMore to determine whether we should keep
-     * the cursor around for additional getMores().
-     *
-     * If false, the caller should close the cursor and indicate this to the client by sending back
-     * a cursor ID of 0.
-     */
-    bool shouldSaveCursorGetMore(PlanExecutor::ExecState finalState,
-                                 PlanExecutor* exec,
-                                 bool isTailable);
-
-    /**
-     * Fills out CurOp with information about this query.
-     */
-    void beginQueryOp(const NamespaceString& nss,
-                      const BSONObj& queryObj,
-                      int ntoreturn,
-                      int ntoskip,
-                      CurOp* curop);
-
-    /**
-     * Fills out CurOp with information regarding this query's execution.
-     *
-     * Uses explain functionality to extract stats from 'exec'.
-     *
-     * The database profiling level, 'dbProfilingLevel', is used to conditionalize whether or not we
-     * do expensive stats gathering.
-     */
-    void endQueryOp(PlanExecutor* exec,
-                    int dbProfilingLevel,
-                    int numResults,
-                    CursorId cursorId,
-                    CurOp* curop);
-
-    /**
-     * Constructs a PlanExecutor for a query with the oplogReplay option set to true,
-     * for the query 'cq' over the collection 'collection'. The PlanExecutor will
-     * wrap a singleton OplogStart stage.
-     *
-     * The oplog start finding hack requires that 'cq' has a $gt or $gte predicate over
-     * a field named 'ts'.
-     *
-     * On success, caller takes ownership of *execOut.
-     */
-    Status getOplogStartHack(OperationContext* txn,
-                             Collection* collection,
-                             CanonicalQuery* cq,
-                             PlanExecutor** execOut);
-
-    /**
-     * Called from the getMore entry point in ops/query.cpp.
-     */
-    QueryResult::View getMore(OperationContext* txn,
-                              const char* ns,
-                              int ntoreturn,
-                              long long cursorid,
-                              CurOp& curop,
-                              int pass,
-                              bool& exhaust,
-                              bool* isCursorAuthorized);
-
-    /**
-     * Run the query 'q' and place the result in 'result'.
-     */
-    std::string runQuery(OperationContext* txn,
-                         QueryMessage& q,
-                         const NamespaceString& ns,
-                         CurOp& curop,
-                         Message &result);
+/**
+ * Run the query 'q' and place the result in 'result'.
+ */
+std::string runQuery(OperationContext* txn,
+                     QueryMessage& q,
+                     const NamespaceString& ns,
+                     Message& result);
 
 }  // namespace mongo

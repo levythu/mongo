@@ -30,7 +30,6 @@
 
 #include "mongo/db/storage/in_memory/in_memory_record_store.h"
 
-#include <boost/shared_ptr.hpp>
 
 #include "mongo/db/storage/in_memory/in_memory_recovery_unit.h"
 #include "mongo/db/storage/record_store_test_harness.h"
@@ -38,24 +37,31 @@
 
 namespace mongo {
 
-    class InMemoryHarnessHelper : public HarnessHelper {
-    public:
-        InMemoryHarnessHelper() {
-        }
+class InMemoryHarnessHelper final : public HarnessHelper {
+public:
+    InMemoryHarnessHelper() {}
 
-        virtual RecordStore* newNonCappedRecordStore() {
-            return new InMemoryRecordStore( "a.b", &data );
-        }
-
-        virtual RecoveryUnit* newRecoveryUnit() {
-            return new InMemoryRecoveryUnit();
-        }
-
-        boost::shared_ptr<void> data;
-    };
-
-    HarnessHelper* newHarnessHelper() {
-        return new InMemoryHarnessHelper();
+    std::unique_ptr<RecordStore> newNonCappedRecordStore() final {
+        return stdx::make_unique<InMemoryRecordStore>("a.b", &data);
+    }
+    std::unique_ptr<RecordStore> newCappedRecordStore(int64_t cappedSizeBytes,
+                                                      int64_t cappedMaxDocs) final {
+        return stdx::make_unique<InMemoryRecordStore>(
+            "a.b", &data, true, cappedSizeBytes, cappedMaxDocs);
     }
 
+    RecoveryUnit* newRecoveryUnit() final {
+        return new InMemoryRecoveryUnit();
+    }
+
+    bool supportsDocLocking() final {
+        return false;
+    }
+
+    std::shared_ptr<void> data;
+};
+
+std::unique_ptr<HarnessHelper> newHarnessHelper() {
+    return stdx::make_unique<InMemoryHarnessHelper>();
+}
 }

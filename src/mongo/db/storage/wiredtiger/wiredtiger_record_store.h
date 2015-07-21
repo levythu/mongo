@@ -34,13 +34,11 @@
 #include <set>
 #include <string>
 
-#include <boost/scoped_ptr.hpp>
-#include <boost/thread/mutex.hpp>
-
 #include "mongo/db/catalog/collection_options.h"
-#include "mongo/db/storage/record_store.h"
 #include "mongo/db/storage/capped_callback.h"
+#include "mongo/db/storage/record_store.h"
 #include "mongo/platform/atomic_word.h"
+#include "mongo/stdx/mutex.h"
 #include "mongo/util/fail_point_service.h"
 
 /**
@@ -51,259 +49,226 @@
 
 namespace mongo {
 
-    class RecoveryUnit;
-    class WiredTigerCursor;
-    class WiredTigerRecoveryUnit;
-    class WiredTigerSizeStorer;
+class RecoveryUnit;
+class WiredTigerCursor;
+class WiredTigerRecoveryUnit;
+class WiredTigerSizeStorer;
 
-    extern const std::string kWiredTigerEngineName;
+extern const std::string kWiredTigerEngineName;
 
-    class WiredTigerRecordStore : public RecordStore {
-    public:
+class WiredTigerRecordStore : public RecordStore {
+public:
+    /**
+     * Parses collections options for wired tiger configuration string for table creation.
+     * The document 'options' is typically obtained from the 'wiredTiger' field of
+     * CollectionOptions::storageEngine.
+     */
+    static StatusWith<std::string> parseOptionsField(const BSONObj options);
 
-        /**
-         * During record store creation, if size storer reports a record count under
-         * 'kCollectionScanOnCreationThreshold', perform a collection scan to update size storer
-         * as well as internal record and data size counters.
-         */
-        static const long long kCollectionScanOnCreationThreshold;
+    /**
+     * Creates a configuration string suitable for 'config' parameter in WT_SESSION::create().
+     * Configuration string is constructed from:
+     *     built-in defaults
+     *     storageEngine.wiredTiger.configString in 'options'
+     *     'extraStrings'
+     * Performs simple validation on the supplied parameters.
+     * Returns error status if validation fails.
+     * Note that even if this function returns an OK status, WT_SESSION:create() may still
+     * fail with the constructed configuration string.
+     */
+    static StatusWith<std::string> generateCreateString(StringData ns,
+                                                        const CollectionOptions& options,
+                                                        StringData extraStrings);
 
-        /**
-         * Parses collections options for wired tiger configuration string for table creation.
-         * The document 'options' is typically obtained from the 'wiredTiger' field of
-         * CollectionOptions::storageEngine.
-         */
-        static StatusWith<std::string> parseOptionsField(const BSONObj options);
+    WiredTigerRecordStore(OperationContext* txn,
+                          StringData ns,
+                          StringData uri,
+                          bool isCapped = false,
+                          int64_t cappedMaxSize = -1,
+                          int64_t cappedMaxDocs = -1,
+                          CappedDocumentDeleteCallback* cappedDeleteCallback = NULL,
+                          WiredTigerSizeStorer* sizeStorer = NULL);
 
-        /**
-         * Creates a configuration string suitable for 'config' parameter in WT_SESSION::create().
-         * Configuration string is constructed from:
-         *     built-in defaults
-         *     storageEngine.wiredTiger.configString in 'options'
-         *     'extraStrings'
-         * Performs simple validation on the supplied parameters.
-         * Returns error status if validation fails.
-         * Note that even if this function returns an OK status, WT_SESSION:create() may still
-         * fail with the constructed configuration string.
-         */
-        static StatusWith<std::string> generateCreateString(StringData ns,
-                                                            const CollectionOptions &options,
-                                                            StringData extraStrings);
+    virtual ~WiredTigerRecordStore();
 
-        WiredTigerRecordStore(OperationContext* txn,
-                              StringData ns,
-                              StringData uri,
-                              bool isCapped = false,
-                              int64_t cappedMaxSize = -1,
-                              int64_t cappedMaxDocs = -1,
-                              CappedDocumentDeleteCallback* cappedDeleteCallback = NULL,
-                              WiredTigerSizeStorer* sizeStorer = NULL );
+    // name of the RecordStore implementation
+    virtual const char* name() const;
 
-        virtual ~WiredTigerRecordStore();
+    virtual long long dataSize(OperationContext* txn) const;
 
-        // name of the RecordStore implementation
-        virtual const char* name() const;
+    virtual long long numRecords(OperationContext* txn) const;
 
-        virtual long long dataSize( OperationContext *txn ) const;
+    virtual bool isCapped() const;
 
-        virtual long long numRecords( OperationContext* txn ) const;
+    virtual int64_t storageSize(OperationContext* txn,
+                                BSONObjBuilder* extraInfo = NULL,
+                                int infoLevel = 0) const;
 
-        virtual bool isCapped() const;
+    // CRUD related
 
-        virtual int64_t storageSize( OperationContext* txn,
-                                     BSONObjBuilder* extraInfo = NULL,
-                                     int infoLevel = 0 ) const;
+    virtual RecordData dataFor(OperationContext* txn, const RecordId& loc) const;
 
-        // CRUD related
+    virtual bool findRecord(OperationContext* txn, const RecordId& loc, RecordData* out) const;
 
-        virtual RecordData dataFor( OperationContext* txn, const RecordId& loc ) const;
+    virtual void deleteRecord(OperationContext* txn, const RecordId& dl);
 
-        virtual bool findRecord( OperationContext* txn, const RecordId& loc, RecordData* out ) const;
+    virtual StatusWith<RecordId> insertRecord(OperationContext* txn,
+                                              const char* data,
+                                              int len,
+                                              bool enforceQuota);
 
-        virtual void deleteRecord( OperationContext* txn, const RecordId& dl );
+    virtual StatusWith<RecordId> insertRecord(OperationContext* txn,
+                                              const DocWriter* doc,
+                                              bool enforceQuota);
 
-        virtual StatusWith<RecordId> insertRecord( OperationContext* txn,
-                                                  const char* data,
-                                                  int len,
-                                                  bool enforceQuota );
+    virtual StatusWith<RecordId> updateRecord(OperationContext* txn,
+                                              const RecordId& oldLocation,
+                                              const char* data,
+                                              int len,
+                                              bool enforceQuota,
+                                              UpdateNotifier* notifier);
 
-        virtual StatusWith<RecordId> insertRecord( OperationContext* txn,
-                                                  const DocWriter* doc,
-                                                  bool enforceQuota );
+    virtual bool updateWithDamagesSupported() const;
 
-        virtual StatusWith<RecordId> updateRecord( OperationContext* txn,
-                                                  const RecordId& oldLocation,
-                                                  const char* data,
-                                                  int len,
-                                                  bool enforceQuota,
-                                                  UpdateNotifier* notifier );
+    virtual Status updateWithDamages(OperationContext* txn,
+                                     const RecordId& loc,
+                                     const RecordData& oldRec,
+                                     const char* damageSource,
+                                     const mutablebson::DamageVector& damages);
 
-        virtual bool updateWithDamagesSupported() const;
+    std::unique_ptr<RecordCursor> getCursor(OperationContext* txn, bool forward) const final;
+    std::vector<std::unique_ptr<RecordCursor>> getManyCursors(OperationContext* txn) const final;
 
-        virtual Status updateWithDamages( OperationContext* txn,
-                                          const RecordId& loc,
-                                          const RecordData& oldRec,
-                                          const char* damageSource,
-                                          const mutablebson::DamageVector& damages );
+    virtual Status truncate(OperationContext* txn);
 
-        virtual RecordIterator* getIterator( OperationContext* txn,
-                                             const RecordId& start = RecordId(),
-                                             const CollectionScanParams::Direction& dir =
-                                             CollectionScanParams::FORWARD ) const;
+    virtual bool compactSupported() const {
+        return true;
+    }
+    virtual bool compactsInPlace() const {
+        return true;
+    }
 
-        virtual std::vector<RecordIterator*> getManyIterators( OperationContext* txn ) const;
+    virtual Status compact(OperationContext* txn,
+                           RecordStoreCompactAdaptor* adaptor,
+                           const CompactOptions* options,
+                           CompactStats* stats);
 
-        virtual Status truncate( OperationContext* txn );
+    virtual Status validate(OperationContext* txn,
+                            bool full,
+                            bool scanData,
+                            ValidateAdaptor* adaptor,
+                            ValidateResults* results,
+                            BSONObjBuilder* output);
 
-        virtual bool compactSupported() const { return true; }
-        virtual bool compactsInPlace() const { return true; }
+    virtual void appendCustomStats(OperationContext* txn,
+                                   BSONObjBuilder* result,
+                                   double scale) const;
 
-        virtual Status compact( OperationContext* txn,
-                                RecordStoreCompactAdaptor* adaptor,
-                                const CompactOptions* options,
-                                CompactStats* stats );
+    virtual void temp_cappedTruncateAfter(OperationContext* txn, RecordId end, bool inclusive);
 
-        virtual Status validate( OperationContext* txn,
-                                 bool full,
-                                 bool scanData,
-                                 ValidateAdaptor* adaptor,
-                                 ValidateResults* results,
-                                 BSONObjBuilder* output );
+    virtual boost::optional<RecordId> oplogStartHack(OperationContext* txn,
+                                                     const RecordId& startingPosition) const;
 
-        virtual void appendCustomStats( OperationContext* txn,
-                                        BSONObjBuilder* result,
-                                        double scale ) const;
+    virtual Status oplogDiskLocRegister(OperationContext* txn, const Timestamp& opTime);
 
-        virtual void temp_cappedTruncateAfter(OperationContext* txn,
-                                              RecordId end,
-                                              bool inclusive);
+    virtual void updateStatsAfterRepair(OperationContext* txn,
+                                        long long numRecords,
+                                        long long dataSize);
 
-        virtual boost::optional<RecordId> oplogStartHack(OperationContext* txn,
-                                                         const RecordId& startingPosition) const;
+    bool isOplog() const {
+        return _isOplog;
+    }
+    bool usingOplogHack() const {
+        return _useOplogHack;
+    }
 
-        virtual Status oplogDiskLocRegister( OperationContext* txn,
-                                             const Timestamp& opTime );
+    void setCappedDeleteCallback(CappedDocumentDeleteCallback* cb) {
+        _cappedDeleteCallback = cb;
+    }
+    int64_t cappedMaxDocs() const;
+    int64_t cappedMaxSize() const;
 
-        virtual void updateStatsAfterRepair(OperationContext* txn,
-                                            long long numRecords,
-                                            long long dataSize);
+    const std::string& getURI() const {
+        return _uri;
+    }
+    uint64_t tableId() const {
+        return _tableId;
+    }
 
-        bool isOplog() const { return _isOplog; }
-        bool usingOplogHack() const { return _useOplogHack; }
+    void setSizeStorer(WiredTigerSizeStorer* ss) {
+        _sizeStorer = ss;
+    }
 
-        void setCappedDeleteCallback(CappedDocumentDeleteCallback* cb) {
-            _cappedDeleteCallback = cb;
-        }
-        int64_t cappedMaxDocs() const;
-        int64_t cappedMaxSize() const;
+    void dealtWithCappedLoc(const RecordId& loc);
+    bool isCappedHidden(const RecordId& loc) const;
+    RecordId lowestCappedHiddenRecord() const;
 
-        const std::string& getURI() const { return _uri; }
-        uint64_t instanceId() const { return _instanceId; }
+    bool inShutdown() const;
+    int64_t cappedDeleteAsNeeded(OperationContext* txn, const RecordId& justInserted);
 
-        void setSizeStorer( WiredTigerSizeStorer* ss ) { _sizeStorer = ss; }
+    int64_t cappedDeleteAsNeeded_inlock(OperationContext* txn, const RecordId& justInserted);
 
-        void dealtWithCappedLoc( const RecordId& loc );
-        bool isCappedHidden( const RecordId& loc ) const;
+    stdx::timed_mutex& cappedDeleterMutex() {
+        return _cappedDeleterMutex;
+    }
 
-        bool inShutdown() const;
-        int64_t cappedDeleteAsNeeded(OperationContext* txn,
-                                     const RecordId& justInserted);
+private:
+    class Cursor;
 
-        int64_t cappedDeleteAsNeeded_inlock(OperationContext* txn,
-                                            const RecordId& justInserted);
+    class CappedInsertChange;
+    class NumRecordsChange;
+    class DataSizeChange;
 
-        boost::timed_mutex& cappedDeleterMutex() { return _cappedDeleterMutex; }
-    private:
+    static WiredTigerRecoveryUnit* _getRecoveryUnit(OperationContext* txn);
 
-        class Iterator : public RecordIterator {
-        public:
-            Iterator( const WiredTigerRecordStore& rs,
-                      OperationContext* txn,
-                      const RecordId& start,
-                      const CollectionScanParams::Direction& dir,
-                      bool forParallelCollectionScan );
+    static int64_t _makeKey(const RecordId& loc);
+    static RecordId _fromKey(int64_t k);
 
-            virtual ~Iterator();
+    void _addUncommitedDiskLoc_inlock(OperationContext* txn, const RecordId& loc);
 
-            virtual bool isEOF();
-            virtual RecordId curr();
-            virtual RecordId getNext();
-            virtual void invalidate(const RecordId& dl);
-            virtual void saveState();
-            virtual bool restoreState(OperationContext *txn);
-            virtual RecordData dataFor( const RecordId& loc ) const;
+    RecordId _nextId();
+    void _setId(RecordId loc);
+    bool cappedAndNeedDelete() const;
+    void _changeNumRecords(OperationContext* txn, int64_t diff);
+    void _increaseDataSize(OperationContext* txn, int amount);
+    RecordData _getData(const WiredTigerCursor& cursor) const;
+    StatusWith<RecordId> extractAndCheckLocForOplog(const char* data, int len);
+    void _oplogSetStartHack(WiredTigerRecoveryUnit* wru) const;
 
-        private:
-            void _getNext();
-            void _locate( const RecordId &loc, bool exact );
-            RecordId _curr() const; // const version of public curr method
+    const std::string _uri;
+    const uint64_t _tableId;  // not persisted
 
-            const WiredTigerRecordStore& _rs;
-            OperationContext* _txn;
-            RecoveryUnit* _savedRecoveryUnit; // only used to sanity check between save/restore
-            const bool _forward;
-            bool _forParallelCollectionScan;
-            boost::scoped_ptr<WiredTigerCursor> _cursor;
-            bool _eof;
-            const RecordId _readUntilForOplog;
+    // The capped settings should not be updated once operations have started
+    const bool _isCapped;
+    const bool _isOplog;
+    const int64_t _cappedMaxSize;
+    const int64_t _cappedMaxSizeSlack;  // when to start applying backpressure
+    const int64_t _cappedMaxDocs;
+    AtomicInt64 _cappedSleep;
+    AtomicInt64 _cappedSleepMS;
+    CappedDocumentDeleteCallback* _cappedDeleteCallback;
+    int _cappedDeleteCheckCount;                    // see comment in ::cappedDeleteAsNeeded
+    mutable stdx::timed_mutex _cappedDeleterMutex;  // see comment in ::cappedDeleteAsNeeded
 
-            RecordId _loc; // Cached key of _cursor. Update any time _cursor is moved.
-            RecordId _lastLoc; // the last thing returned from getNext()
-        };
+    const bool _useOplogHack;
 
-        class CappedInsertChange;
-        class NumRecordsChange;
-        class DataSizeChange;
+    typedef std::vector<RecordId> SortedDiskLocs;
+    SortedDiskLocs _uncommittedDiskLocs;
+    RecordId _oplog_visibleTo;
+    RecordId _oplog_highestSeen;
+    mutable stdx::mutex _uncommittedDiskLocsMutex;
 
-        static WiredTigerRecoveryUnit* _getRecoveryUnit( OperationContext* txn );
+    AtomicInt64 _nextIdNum;
+    AtomicInt64 _dataSize;
+    AtomicInt64 _numRecords;
 
-        static int64_t _makeKey(const RecordId &loc);
-        static RecordId _fromKey(int64_t k);
+    WiredTigerSizeStorer* _sizeStorer;  // not owned, can be NULL
+    int _sizeStorerCounter;
 
-        void _addUncommitedDiskLoc_inlock( OperationContext* txn, const RecordId& loc );
+    bool _shuttingDown;
+    bool _hasBackgroundThread;
+};
 
-        RecordId _nextId();
-        void _setId(RecordId loc);
-        bool cappedAndNeedDelete() const;
-        void _changeNumRecords(OperationContext* txn, int64_t diff);
-        void _increaseDataSize(OperationContext* txn, int amount);
-        RecordData _getData( const WiredTigerCursor& cursor) const;
-        StatusWith<RecordId> extractAndCheckLocForOplog(const char* data, int len);
-        void _oplogSetStartHack( WiredTigerRecoveryUnit* wru ) const;
-
-        const std::string _uri;
-        const uint64_t _instanceId; // not persisted
-
-        // The capped settings should not be updated once operations have started
-        const bool _isCapped;
-        const bool _isOplog;
-        const int64_t _cappedMaxSize;
-        const int64_t _cappedMaxSizeSlack; // when to start applying backpressure
-        const int64_t _cappedMaxDocs;
-        CappedDocumentDeleteCallback* _cappedDeleteCallback;
-        int _cappedDeleteCheckCount; // see comment in ::cappedDeleteAsNeeded
-        mutable boost::timed_mutex _cappedDeleterMutex; // see comment in ::cappedDeleteAsNeeded
-
-        const bool _useOplogHack;
-
-        typedef std::vector<RecordId> SortedDiskLocs;
-        SortedDiskLocs _uncommittedDiskLocs;
-        RecordId _oplog_visibleTo;
-        RecordId _oplog_highestSeen;
-        mutable boost::mutex _uncommittedDiskLocsMutex;
-
-        AtomicInt64 _nextIdNum;
-        AtomicInt64 _dataSize;
-        AtomicInt64 _numRecords;
-
-        WiredTigerSizeStorer* _sizeStorer; // not owned, can be NULL
-        int _sizeStorerCounter;
-
-        bool _shuttingDown;
-        bool _hasBackgroundThread;
-    };
-
-    // WT failpoint to throw write conflict exceptions randomly
-    MONGO_FP_FORWARD_DECLARE(WTWriteConflictException);
-
+// WT failpoint to throw write conflict exceptions randomly
+MONGO_FP_FORWARD_DECLARE(WTWriteConflictException);
 }

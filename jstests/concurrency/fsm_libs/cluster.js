@@ -17,6 +17,7 @@ var Cluster = function(options) {
             'sameDB',
             'setupFunctions',
             'sharded',
+            'useLegacyConfigServers'
             ];
 
         Object.keys(options).forEach(function(option) {
@@ -39,6 +40,13 @@ var Cluster = function(options) {
 
         options.sharded = options.sharded || false;
         assert.eq('boolean', typeof options.sharded);
+
+        if (typeof options.useLegacyConfigServers !== 'undefined') {
+            assert(options.sharded, "Must be sharded if 'useLegacyConfigServers' is specified");
+        }
+
+        options.useLegacyConfigServers = options.useLegacyConfigServers || false;
+        assert.eq('boolean', typeof options.useLegacyConfigServers);
 
         options.setupFunctions = options.setupFunctions || {};
         assert.eq('object', typeof options.setupFunctions);
@@ -63,6 +71,10 @@ var Cluster = function(options) {
         mongos: [],
         mongod: []
     };
+    var nextConn = 0;
+
+    // TODO: Define size of replica set from options
+    var replSetNodes = 3;
 
     validateClusterOptions(options);
     Object.freeze(options);
@@ -75,17 +87,22 @@ var Cluster = function(options) {
         }
 
         if (options.sharded) {
-            // TODO: allow 'options' to specify the number of shards
+            // TODO: allow 'options' to specify the number of shards and mongos processes
             var shardConfig = {
                 shards: 2,
-                mongos: 1,
+                mongos: 2,
+                // Legacy config servers are pre-3.2 style, 3-node non-replica-set config servers
+                sync: options.useLegacyConfigServers,
                 verbose: verbosityLevel
             };
 
             // TODO: allow 'options' to specify an 'rs' config
             if (options.replication) {
                 shardConfig.rs = {
-                    nodes: 3,
+                    nodes: replSetNodes,
+                    // Increase the oplog size (in MB) to prevent rollover
+                    // during write-heavy workloads
+                    oplogSize: 1024,
                     verbose: verbosityLevel
                 };
             }
@@ -132,7 +149,9 @@ var Cluster = function(options) {
         } else if (options.replication) {
             // TODO: allow 'options' to specify the number of nodes
             var replSetConfig = {
-                nodes: 3,
+                nodes: replSetNodes,
+                // Increase the oplog size (in MB) to prevent rollover during write-heavy workloads
+                oplogSize: 1024,
                 nodeOptions: { verbose: verbosityLevel }
             };
 
@@ -229,6 +248,10 @@ var Cluster = function(options) {
             throw new Error('cluster has not been initialized yet');
         }
 
+        // Alternate mongos connections for sharded clusters
+        if (this.isSharded()) {
+            return _conns.mongos[nextConn++ % _conns.mongos.length].host;
+        }
         return conn.host;
     };
 
@@ -236,9 +259,34 @@ var Cluster = function(options) {
         return !!options.sharded;
     };
 
+    this.isReplication = function isReplication() {
+        return !!options.replication;
+    };
+
     this.shardCollection = function shardCollection() {
         assert(this.isSharded(), 'cluster is not sharded');
         throw new Error('cluster has not been initialized yet');
+    };
+
+    this.awaitReplication = function awaitReplication() {
+        if (this.isReplication()) {
+            var wc = {
+                writeConcern: {
+                    w: replSetNodes, // all nodes in replica set
+                    wtimeout: 300000 // wait up to 5 minutes
+                }
+            };
+            this.executeOnMongodNodes(function (db) {
+                // Execute on all primary nodes
+                if (db.isMaster().ismaster) {
+                    // Insert a document with a writeConcern for all nodes in the replica set to
+                    // ensure that all previous workload operations have completed on secondaries
+                    var result = db.getSiblingDB('test').fsm_teardown.insert({ a: 1 }, wc);
+                    assert.writeOK(result, 'teardown insert failed: ' + tojson(result));
+                    assert(db.getSiblingDB('test').fsm_teardown.drop(), 'teardown drop failed');
+                }
+            });
+        }
     };
 };
 

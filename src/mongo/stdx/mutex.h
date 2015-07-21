@@ -28,20 +28,21 @@
 
 #pragma once
 
-#include <boost/thread/mutex.hpp>
+#include <mutex>
 
 namespace mongo {
 namespace stdx {
 
-    using boost::mutex;
-    using boost::timed_mutex;
+using ::std::mutex;            // NOLINT
+using ::std::timed_mutex;      // NOLINT
+using ::std::recursive_mutex;  // NOLINT
 
-    using boost::adopt_lock_t;
-    using boost::defer_lock_t;
-    using boost::try_to_lock_t;
+using ::std::adopt_lock_t;   // NOLINT
+using ::std::defer_lock_t;   // NOLINT
+using ::std::try_to_lock_t;  // NOLINT
 
-    using boost::lock_guard;
-    using boost::unique_lock;
+using ::std::lock_guard;   // NOLINT
+using ::std::unique_lock;  // NOLINT
 
 #if _MSC_VER < 1900
 #define MONGO_STDX_CONSTEXPR const
@@ -49,9 +50,9 @@ namespace stdx {
 #define MONGO_STDX_CONSTEXPR constexpr
 #endif
 
-    MONGO_STDX_CONSTEXPR adopt_lock_t adopt_lock{};
-    MONGO_STDX_CONSTEXPR defer_lock_t defer_lock{};
-    MONGO_STDX_CONSTEXPR try_to_lock_t try_to_lock{};
+MONGO_STDX_CONSTEXPR adopt_lock_t adopt_lock{};
+MONGO_STDX_CONSTEXPR defer_lock_t defer_lock{};
+MONGO_STDX_CONSTEXPR try_to_lock_t try_to_lock{};
 
 #undef MONGO_STDX_CONSTEXPR
 

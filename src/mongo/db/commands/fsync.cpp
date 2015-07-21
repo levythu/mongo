@@ -30,7 +30,6 @@
 
 #include "mongo/db/commands/fsync.h"
 
-#include <boost/thread/condition.hpp>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -45,244 +44,258 @@
 #include "mongo/db/auth/authorization_manager.h"
 #include "mongo/db/auth/authorization_session.h"
 #include "mongo/db/auth/privilege.h"
-#include "mongo/db/concurrency/d_concurrency.h"
+#include "mongo/db/client.h"
 #include "mongo/db/commands.h"
+#include "mongo/db/concurrency/d_concurrency.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/db/service_context.h"
 #include "mongo/db/storage/mmap_v1/dur.h"
 #include "mongo/db/storage/storage_engine.h"
-#include "mongo/db/client.h"
-#include "mongo/db/operation_context_impl.h"
+#include "mongo/stdx/condition_variable.h"
 #include "mongo/util/background.h"
 #include "mongo/util/log.h"
 
 namespace mongo {
 
-    using std::endl;
-    using std::string;
-    using std::stringstream;
+using std::endl;
+using std::string;
+using std::stringstream;
 
-    class FSyncLockThread : public BackgroundJob {
-        void doRealWork();
-    public:
-        FSyncLockThread() : BackgroundJob( true ) {}
-        virtual ~FSyncLockThread(){}
-        virtual string name() const { return "FSyncLockThread"; }
-        virtual void run() {
-            Client::initThread( "fsyncLockWorker" );
-            try {
-                doRealWork();
-            }
-            catch ( std::exception& e ) {
-                error() << "FSyncLockThread exception: " << e.what() << endl;
-            }
+class FSyncLockThread : public BackgroundJob {
+    void doRealWork();
+
+public:
+    FSyncLockThread() : BackgroundJob(true) {}
+    virtual ~FSyncLockThread() {}
+    virtual string name() const {
+        return "FSyncLockThread";
+    }
+    virtual void run() {
+        Client::initThread("fsyncLockWorker");
+        try {
+            doRealWork();
+        } catch (std::exception& e) {
+            error() << "FSyncLockThread exception: " << e.what() << endl;
         }
-    };
+    }
+};
 
-    /* see unlockFsync() for unlocking:
-       db.$cmd.sys.unlock.findOne()
-    */
-    class FSyncCommand : public Command {
-    public:
-        static const char* url() { return "http://dochub.mongodb.org/core/fsynccommand"; }
-        bool locked;
-        bool pendingUnlock;
-        SimpleMutex m; // protects locked var above
-        string err;
+/* see unlockFsync() for unlocking:
+   db.$cmd.sys.unlock.findOne()
+*/
+class FSyncCommand : public Command {
+public:
+    static const char* url() {
+        return "http://dochub.mongodb.org/core/fsynccommand";
+    }
+    bool locked;
+    bool pendingUnlock;
+    SimpleMutex m;  // protects locked var above
+    string err;
 
-        boost::condition _threadSync;
-        boost::condition _unlockSync;
+    stdx::condition_variable_any _threadSync;
+    stdx::condition_variable_any _unlockSync;
 
-        FSyncCommand() : Command( "fsync" ), m("lockfsync") { locked=false; pendingUnlock=false; }
-        virtual bool isWriteCommandForConfigServer() const { return false; }
-        virtual bool slaveOk() const { return true; }
-        virtual bool adminOnly() const { return true; }
-        virtual void help(stringstream& h) const { h << url(); }
-        virtual void addRequiredPrivileges(const std::string& dbname,
-                                           const BSONObj& cmdObj,
-                                           std::vector<Privilege>* out) {
-            ActionSet actions;
-            actions.addAction(ActionType::fsync);
-            out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
+    FSyncCommand() : Command("fsync") {
+        locked = false;
+        pendingUnlock = false;
+    }
+    virtual bool isWriteCommandForConfigServer() const {
+        return false;
+    }
+    virtual bool slaveOk() const {
+        return true;
+    }
+    virtual bool adminOnly() const {
+        return true;
+    }
+    virtual void help(stringstream& h) const {
+        h << url();
+    }
+    virtual void addRequiredPrivileges(const std::string& dbname,
+                                       const BSONObj& cmdObj,
+                                       std::vector<Privilege>* out) {
+        ActionSet actions;
+        actions.addAction(ActionType::fsync);
+        out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
+    }
+    virtual bool run(OperationContext* txn,
+                     const string& dbname,
+                     BSONObj& cmdObj,
+                     int,
+                     string& errmsg,
+                     BSONObjBuilder& result) {
+        if (txn->lockState()->isLocked()) {
+            errmsg = "fsync: Cannot execute fsync command from contexts that hold a data lock";
+            return false;
         }
-        virtual bool run(OperationContext* txn,
-                         const string& dbname,
-                         BSONObj& cmdObj,
-                         int,
-                         string& errmsg,
-                         BSONObjBuilder& result) {
 
-            if (txn->lockState()->isLocked()) {
-                errmsg = "fsync: Cannot execute fsync command from contexts that hold a data lock";
+        bool sync =
+            !cmdObj["async"].trueValue();  // async means do an fsync, but return immediately
+        bool lock = cmdObj["lock"].trueValue();
+        log() << "CMD fsync: sync:" << sync << " lock:" << lock << endl;
+        if (lock) {
+            if (!sync) {
+                errmsg = "fsync: sync option must be true when using lock";
                 return false;
             }
 
-            bool sync = !cmdObj["async"].trueValue(); // async means do an fsync, but return immediately
-            bool lock = cmdObj["lock"].trueValue();
-            log() << "CMD fsync: sync:" << sync << " lock:" << lock << endl;
-            if( lock ) {
-                if ( ! sync ) {
-                    errmsg = "fsync: sync option must be true when using lock";
-                    return false;
-                }
+            stdx::lock_guard<SimpleMutex> lk(m);
+            err = "";
 
-                SimpleMutex::scoped_lock lk(m);
-                err = "";
-                
-                (new FSyncLockThread())->go();
-                while ( ! locked && err.size() == 0 ) {
-                    _threadSync.wait( m );
-                }
-                
-                if ( err.size() ){
-                    errmsg = err;
-                    return false;
-                }
-                
-                log() << "db is now locked, no writes allowed. db.fsyncUnlock() to unlock" << endl;
-                log() << "    For more info see " << FSyncCommand::url() << endl;
-                result.append("info", "now locked against writes, use db.fsyncUnlock() to unlock");
-                result.append("seeAlso", FSyncCommand::url());
-
+            (new FSyncLockThread())->go();
+            while (!locked && err.size() == 0) {
+                _threadSync.wait(m);
             }
-            else {
-                // the simple fsync command case
-                if (sync) {
-                    // can this be GlobalRead? and if it can, it should be nongreedy.
-                    ScopedTransaction transaction(txn, MODE_X);
-                    Lock::GlobalWrite w(txn->lockState());
-                    getDur().commitNow(txn);
 
-                    //  No WriteUnitOfWork needed, as this does no writes of its own.
-                }
-
-                // Take a global IS lock to ensure the storage engine is not shutdown
-                Lock::GlobalLock global(txn->lockState(), MODE_IS, UINT_MAX);
-                StorageEngine* storageEngine = getGlobalServiceContext()->getGlobalStorageEngine();
-                result.append( "numFiles" , storageEngine->flushAllFiles( sync ) );
-            }
-            return 1;
-        }
-    } fsyncCmd;
-
-    namespace {
-        bool unlockFsync();
-    }  // namespace
-
-    class FSyncUnlockCommand : public Command {
-    public:
-
-        FSyncUnlockCommand() : Command("fsyncUnlock") {}
-
-        bool isWriteCommandForConfigServer() const override { return false; }
-
-        bool slaveOk() const override { return true; }
-
-        bool adminOnly() const override { return true; }
-
-        Status checkAuthForCommand(ClientBasic* client,
-                                   const std::string& dbname,
-                                   const BSONObj& cmdObj) override {
-
-            bool isAuthorized = AuthorizationSession::get(client)->isAuthorizedForActionsOnResource(
-                                    ResourcePattern::forClusterResource(),
-                                    ActionType::unlock);
-
-            return isAuthorized ? Status::OK() : Status(ErrorCodes::Unauthorized, "Unauthorized");
-        }
-
-        bool run(OperationContext* txn,
-                 const std::string& db,
-                 BSONObj& cmdObj,
-                 int options,
-                 std::string& errmsg,
-                 BSONObjBuilder& result) override {
-
-            log() << "command: unlock requested";
-
-            if (unlockFsync()) {
-                result.append("info", "unlock completed");
-                return true;
-            }
-            else {
-                errmsg = "not locked";
+            if (err.size()) {
+                errmsg = err;
                 return false;
             }
-        }
 
-    } unlockFsyncCmd;
+            log() << "db is now locked, no writes allowed. db.fsyncUnlock() to unlock" << endl;
+            log() << "    For more info see " << FSyncCommand::url() << endl;
+            result.append("info", "now locked against writes, use db.fsyncUnlock() to unlock");
+            result.append("seeAlso", FSyncCommand::url());
 
-    SimpleMutex filesLockedFsync("filesLockedFsync");
+        } else {
+            // the simple fsync command case
+            if (sync) {
+                // can this be GlobalRead? and if it can, it should be nongreedy.
+                ScopedTransaction transaction(txn, MODE_X);
+                Lock::GlobalWrite w(txn->lockState());
+                getDur().commitNow(txn);
 
-    void FSyncLockThread::doRealWork() {
-        SimpleMutex::scoped_lock lkf(filesLockedFsync);
+                //  No WriteUnitOfWork needed, as this does no writes of its own.
+            }
 
-        OperationContextImpl txn;
-        ScopedTransaction transaction(&txn, MODE_X);
-        Lock::GlobalWrite global(txn.lockState()); // No WriteUnitOfWork needed
-
-        SimpleMutex::scoped_lock lk(fsyncCmd.m);
-
-        invariant(!fsyncCmd.locked);    // impossible to get here if locked is true
-        try {
-            getDur().syncDataAndTruncateJournal(&txn);
-        }
-        catch( std::exception& e ) {
-            error() << "error doing syncDataAndTruncateJournal: " << e.what() << endl;
-            fsyncCmd.err = e.what();
-            fsyncCmd._threadSync.notify_one();
-            fsyncCmd.locked = false;
-            return;
-        }
-
-        txn.lockState()->downgradeGlobalXtoSForMMAPV1();
-
-        try {
+            // Take a global IS lock to ensure the storage engine is not shutdown
+            Lock::GlobalLock global(txn->lockState(), MODE_IS, UINT_MAX);
             StorageEngine* storageEngine = getGlobalServiceContext()->getGlobalStorageEngine();
-            storageEngine->flushAllFiles(true);
+            result.append("numFiles", storageEngine->flushAllFiles(sync));
         }
-        catch( std::exception& e ) {
-            error() << "error doing flushAll: " << e.what() << endl;
-            fsyncCmd.err = e.what();
-            fsyncCmd._threadSync.notify_one();
-            fsyncCmd.locked = false;
-            return;
-        }
+        return 1;
+    }
+} fsyncCmd;
 
-        invariant(!fsyncCmd.locked);
-        fsyncCmd.locked = true;
+namespace {
+bool unlockFsync();
+}  // namespace
 
-        fsyncCmd._threadSync.notify_one();
+class FSyncUnlockCommand : public Command {
+public:
+    FSyncUnlockCommand() : Command("fsyncUnlock") {}
 
-        while ( ! fsyncCmd.pendingUnlock ) {
-            fsyncCmd._unlockSync.wait(fsyncCmd.m);
-        }
-        fsyncCmd.pendingUnlock = false;
-
-        fsyncCmd.locked = false;
-        fsyncCmd.err = "unlocked";
-
-        fsyncCmd._unlockSync.notify_one();
+    bool isWriteCommandForConfigServer() const override {
+        return false;
     }
 
-    bool lockedForWriting() {
-        return fsyncCmd.locked;
+    bool slaveOk() const override {
+        return true;
     }
-    
-    namespace {
-        // @return true if unlocked
-        bool unlockFsync() {
-            SimpleMutex::scoped_lock lk( fsyncCmd.m );
-            if( !fsyncCmd.locked ) {
-                return false;
-            }
-            fsyncCmd.pendingUnlock = true;
-            fsyncCmd._unlockSync.notify_one();
-            fsyncCmd._threadSync.notify_one();
 
-            while ( fsyncCmd.locked ) {
-                fsyncCmd._unlockSync.wait( fsyncCmd.m );
-            }
+    bool adminOnly() const override {
+        return true;
+    }
+
+    Status checkAuthForCommand(ClientBasic* client,
+                               const std::string& dbname,
+                               const BSONObj& cmdObj) override {
+        bool isAuthorized = AuthorizationSession::get(client)->isAuthorizedForActionsOnResource(
+            ResourcePattern::forClusterResource(), ActionType::unlock);
+
+        return isAuthorized ? Status::OK() : Status(ErrorCodes::Unauthorized, "Unauthorized");
+    }
+
+    bool run(OperationContext* txn,
+             const std::string& db,
+             BSONObj& cmdObj,
+             int options,
+             std::string& errmsg,
+             BSONObjBuilder& result) override {
+        log() << "command: unlock requested";
+
+        if (unlockFsync()) {
+            result.append("info", "unlock completed");
             return true;
+        } else {
+            errmsg = "not locked";
+            return false;
         }
-    }  // namespace
+    }
+
+} unlockFsyncCmd;
+
+SimpleMutex filesLockedFsync;
+
+void FSyncLockThread::doRealWork() {
+    stdx::lock_guard<SimpleMutex> lkf(filesLockedFsync);
+
+    OperationContextImpl txn;
+    ScopedTransaction transaction(&txn, MODE_X);
+    Lock::GlobalWrite global(txn.lockState());  // No WriteUnitOfWork needed
+
+    stdx::lock_guard<SimpleMutex> lk(fsyncCmd.m);
+
+    invariant(!fsyncCmd.locked);  // impossible to get here if locked is true
+    try {
+        getDur().syncDataAndTruncateJournal(&txn);
+    } catch (std::exception& e) {
+        error() << "error doing syncDataAndTruncateJournal: " << e.what() << endl;
+        fsyncCmd.err = e.what();
+        fsyncCmd._threadSync.notify_one();
+        fsyncCmd.locked = false;
+        return;
+    }
+
+    txn.lockState()->downgradeGlobalXtoSForMMAPV1();
+
+    try {
+        StorageEngine* storageEngine = getGlobalServiceContext()->getGlobalStorageEngine();
+        storageEngine->flushAllFiles(true);
+    } catch (std::exception& e) {
+        error() << "error doing flushAll: " << e.what() << endl;
+        fsyncCmd.err = e.what();
+        fsyncCmd._threadSync.notify_one();
+        fsyncCmd.locked = false;
+        return;
+    }
+
+    invariant(!fsyncCmd.locked);
+    fsyncCmd.locked = true;
+
+    fsyncCmd._threadSync.notify_one();
+
+    while (!fsyncCmd.pendingUnlock) {
+        fsyncCmd._unlockSync.wait(fsyncCmd.m);
+    }
+    fsyncCmd.pendingUnlock = false;
+
+    fsyncCmd.locked = false;
+    fsyncCmd.err = "unlocked";
+
+    fsyncCmd._unlockSync.notify_one();
+}
+
+bool lockedForWriting() {
+    return fsyncCmd.locked;
+}
+
+namespace {
+// @return true if unlocked
+bool unlockFsync() {
+    stdx::lock_guard<SimpleMutex> lk(fsyncCmd.m);
+    if (!fsyncCmd.locked) {
+        return false;
+    }
+    fsyncCmd.pendingUnlock = true;
+    fsyncCmd._unlockSync.notify_one();
+    fsyncCmd._threadSync.notify_one();
+
+    while (fsyncCmd.locked) {
+        fsyncCmd._unlockSync.wait(fsyncCmd.m);
+    }
+    return true;
+}
+}  // namespace
 }

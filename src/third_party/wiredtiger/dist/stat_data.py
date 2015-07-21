@@ -218,7 +218,6 @@ connection_stats = [
     ##########################################
     # Logging statistics
     ##########################################
-    LogStat('log_buffer_grow', 'log buffer size increases'),
     LogStat('log_buffer_size', 'total log buffer size', 'no_clear,no_scale'),
     LogStat('log_bytes_payload', 'log bytes of payload data'),
     LogStat('log_bytes_written', 'log bytes written'),
@@ -285,6 +284,7 @@ connection_stats = [
         'no_clear,no_scale'),
     TxnStat('txn_pinned_range',
         'transaction range of IDs currently pinned', 'no_clear,no_scale'),
+    TxnStat('txn_sync', 'transaction sync calls'),
     TxnStat('txn_commit', 'transactions committed'),
     TxnStat('txn_fail_cache', 'transaction failures due to cache overflow'),
     TxnStat('txn_rollback', 'transactions rolled back'),

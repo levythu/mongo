@@ -23,7 +23,7 @@ env.Library(
     ],
     LIBDEPS=[
         "explain_common",
-        "getmore_request",
+        "command_request_response",
         "index_bounds",
         "lite_parsed_query",
         "$BUILD_DIR/mongo/bson/bson",
@@ -81,8 +81,10 @@ env.Library(
     ],
     LIBDEPS=[
         "$BUILD_DIR/mongo/bson/bson",
-        "$BUILD_DIR/mongo/db/matcher/expressions_geo",
         "$BUILD_DIR/mongo/db/index_names",
+        "$BUILD_DIR/mongo/db/index/expression_params",
+        "$BUILD_DIR/mongo/db/index/s2_keys",
+        "$BUILD_DIR/mongo/db/matcher/expressions_geo",
         "$BUILD_DIR/mongo/db/mongohasher",
         "$BUILD_DIR/mongo/db/server_parameters",
     ],
@@ -99,23 +101,37 @@ env.Library(
 )
 
 env.Library(
-    target="getmore_request",
+    target='command_request_response',
     source=[
-        "getmore_request.cpp"
+        'count_request.cpp',
+        'cursor_responses.cpp',
+        'find_and_modify_request.cpp',
+        'getmore_request.cpp',
+        'getmore_response.cpp',
+        'killcursors_request.cpp',
+        'killcursors_response.cpp',
     ],
     LIBDEPS=[
-        "$BUILD_DIR/mongo/bson/bson",
-    ],
+        '$BUILD_DIR/mongo/bson/bson',
+        '$BUILD_DIR/mongo/db/common',
+        '$BUILD_DIR/mongo/db/namespace_string',
+        '$BUILD_DIR/mongo/rpc/command_status',
+    ]
 )
 
 env.CppUnitTest(
-    target="getmore_request_test",
+    target='command_request_response_test',
     source=[
-        "getmore_request_test.cpp"
+        'count_request_test.cpp',
+        'find_and_modify_request_test.cpp',
+        'getmore_request_test.cpp',
+        'getmore_response_test.cpp',
+        'killcursors_request_test.cpp',
+        'killcursors_response_test.cpp',
     ],
     LIBDEPS=[
-        "getmore_request",
-    ],
+        'command_request_response',
+    ]
 )
 
 env.Library(
@@ -134,7 +150,7 @@ env.Library(
     ],
     LIBDEPS=[
         "$BUILD_DIR/mongo/bson/bson",
-        "$BUILD_DIR/mongo/db/repl/read_after_optime_args",
+        "$BUILD_DIR/mongo/db/repl/read_concern_args",
     ],
 )
 
@@ -293,6 +309,16 @@ env.CppUnitTest(
     target="query_planner_geo_test",
     source=[
         "query_planner_geo_test.cpp"
+    ],
+    LIBDEPS=[
+        "query_planner_test_fixture",
+    ],
+)
+
+env.CppUnitTest(
+    target="query_planner_partialidx_test",
+    source=[
+        "query_planner_partialidx_test.cpp"
     ],
     LIBDEPS=[
         "query_planner_test_fixture",

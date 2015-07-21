@@ -240,7 +240,7 @@ __ovfl_reuse_skip_search(
 		 * of identical overflow items.  (We've seen it in benchmarks.)
 		 * Move through a list of identical items at the current level
 		 * as long as the next one is in-use, otherwise, drop down a
-		 * level.   When at the bottom level, return items if reusable,
+		 * level. When at the bottom level, return items if reusable,
 		 * else NULL.
 		 */
 		len = WT_MIN((*e)->value_size, value_size);
@@ -711,7 +711,7 @@ __ovfl_txnc_wrapup(WT_SESSION_IMPL *session, WT_PAGE *page)
 	 * visibility check could give different results as the global ID moves
 	 * forward.
 	 */
-	oldest_txn = S2C(session)->txn_global.oldest_id;
+	oldest_txn = __wt_txn_oldest_id(session);
 
 	/*
 	 * Discard any transaction-cache records with transaction IDs earlier

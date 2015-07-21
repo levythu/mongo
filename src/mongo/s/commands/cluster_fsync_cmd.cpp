@@ -28,79 +28,91 @@
 
 #include "mongo/platform/basic.h"
 
+#include "mongo/client/read_preference.h"
+#include "mongo/client/remote_command_targeter.h"
 #include "mongo/db/commands.h"
 #include "mongo/s/client/shard.h"
+#include "mongo/s/client/shard_registry.h"
+#include "mongo/s/grid.h"
 
 namespace mongo {
 namespace {
 
-    class FsyncCommand : public Command {
-    public:
-        FsyncCommand() : Command("fsync", false, "fsync") { }
+class FsyncCommand : public Command {
+public:
+    FsyncCommand() : Command("fsync", false, "fsync") {}
 
-        virtual bool slaveOk() const {
-            return true;
-        }
+    virtual bool slaveOk() const {
+        return true;
+    }
 
-        virtual bool adminOnly() const {
-            return true;
-        }
+    virtual bool adminOnly() const {
+        return true;
+    }
 
-        virtual bool isWriteCommandForConfigServer() const {
+    virtual bool isWriteCommandForConfigServer() const {
+        return false;
+    }
+
+    virtual void help(std::stringstream& help) const {
+        help << "invoke fsync on all shards belonging to the cluster";
+    }
+
+    virtual void addRequiredPrivileges(const std::string& dbname,
+                                       const BSONObj& cmdObj,
+                                       std::vector<Privilege>* out) {
+        ActionSet actions;
+        actions.addAction(ActionType::fsync);
+        out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
+    }
+
+    virtual bool run(OperationContext* txn,
+                     const std::string& dbname,
+                     BSONObj& cmdObj,
+                     int options,
+                     std::string& errmsg,
+                     BSONObjBuilder& result) {
+        if (cmdObj["lock"].trueValue()) {
+            errmsg = "can't do lock through mongos";
             return false;
         }
 
-        virtual void help(std::stringstream& help) const {
-            help << "invoke fsync on all shards belonging to the cluster";
-        }
+        BSONObjBuilder sub;
 
-        virtual void addRequiredPrivileges(const std::string& dbname,
-                                           const BSONObj& cmdObj,
-                                           std::vector<Privilege>* out) {
-            ActionSet actions;
-            actions.addAction(ActionType::fsync);
-            out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
-        }
+        bool ok = true;
+        int numFiles = 0;
 
-        virtual bool run(OperationContext* txn,
-                         const std::string& dbname,
-                         BSONObj& cmdObj,
-                         int options,
-                         std::string& errmsg,
-                         BSONObjBuilder& result) {
+        std::vector<ShardId> shardIds;
+        grid.shardRegistry()->getAllShardIds(&shardIds);
 
-            if (cmdObj["lock"].trueValue()) {
-                errmsg = "can't do lock through mongos";
-                return false;
+        for (const ShardId& shardId : shardIds) {
+            const auto s = grid.shardRegistry()->getShard(shardId);
+            if (!s) {
+                continue;
             }
 
-            BSONObjBuilder sub;
+            const auto shardHost = uassertStatusOK(
+                s->getTargeter()->findHost({ReadPreference::PrimaryOnly, TagSet::primaryOnly()}));
 
-            bool ok = true;
-            int numFiles = 0;
+            BSONObj x = uassertStatusOK(
+                grid.shardRegistry()->runCommand(shardHost, "admin", BSON("fsync" << 1)));
 
-            std::vector<Shard> shards;
-            Shard::getAllShards(shards);
-            for (std::vector<Shard>::const_iterator i = shards.begin(); i != shards.end(); i++) {
-                Shard s = *i;
+            sub.append(s->getId(), x);
 
-                BSONObj x = s.runCommand("admin", "fsync");
-                sub.append(s.getName(), x);
-
-                if (!x["ok"].trueValue()) {
-                    ok = false;
-                    errmsg = x["errmsg"].String();
-                }
-
-                numFiles += x["numFiles"].numberInt();
+            if (!x["ok"].trueValue()) {
+                ok = false;
+                errmsg = x["errmsg"].String();
             }
 
-            result.append("numFiles", numFiles);
-            result.append("all", sub.obj());
-            return ok;
+            numFiles += x["numFiles"].numberInt();
         }
 
-    } fsyncCmd;
+        result.append("numFiles", numFiles);
+        result.append("all", sub.obj());
+        return ok;
+    }
 
-} // namespace
-} // namespace mongo
+} clusterFsyncCmd;
+
+}  // namespace
+}  // namespace mongo

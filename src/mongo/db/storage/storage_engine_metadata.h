@@ -28,6 +28,7 @@
 
 #pragma once
 
+#include <boost/optional.hpp>
 #include <memory>
 #include <string>
 
@@ -37,90 +38,82 @@
 
 namespace mongo {
 
+/**
+ * This reads and write the storage engine metadata file 'storage.bson'
+ * in the data directory (See --dbpath).
+ * 'storage.engine' is the only mandatory field in the BSON metadata file.
+ * Fields other than 'storage.engine' are ignored.
+ */
+class StorageEngineMetadata {
+    MONGO_DISALLOW_COPYING(StorageEngineMetadata);
+
+public:
     /**
-     * This reads and write the storage engine metadata file 'storage.bson'
-     * in the data directory (See --dbpath).
-     * 'storage.engine' is the only mandatory field in the BSON metadata file.
-     * Fields other than 'storage.engine' are ignored.
+     * Returns a metadata object describing the storage engine that backs the data files
+     * contained in 'dbpath', and nullptr otherwise.
      */
-    class StorageEngineMetadata {
-        MONGO_DISALLOW_COPYING(StorageEngineMetadata);
+    static std::unique_ptr<StorageEngineMetadata> forPath(const std::string& dbpath);
 
-    public:
+    /**
+     * Returns the name of the storage engine that backs the data files contained in 'dbpath',
+     * and none otherwise.
+     */
+    static boost::optional<std::string> getStorageEngineForPath(const std::string& dbpath);
 
-        /**
-         * Validates metadata in data directory against current storage engine.
-         * 1) If the metadata file exists, ensure that the information in the file
-         *    is consistent with the current storage engine. Otherwise, raise an error.
-         *    Returns the metadata object on successful validation.
-         * 2) If the metadata file exists but is not readable (eg. corrupted),
-         *    return NULL. This allows the startup process to overwrite the corrupted
-         *    metadata file with a valid copy.
-         * 3) If the metadata file does not exist, look for local.ns or local/local.ns
-         *    in the data directory. If we detect either file, raise an error
-         *    only if the current storage engine is not 'mmapv1'.
-         *    This makes validation more forgiving of situations where
-         *    application data is placed in the data directory prior
-         *    to server start up.
-         *    Returns NULL on successful validation.
-         */
-        static std::auto_ptr<StorageEngineMetadata> validate(const std::string& dbpath,
-                                                             const std::string& storageEngine);
+    /**
+     * Sets fields to defaults.
+     * Use read() load metadata from file.
+     */
+    StorageEngineMetadata(const std::string& dbpath);
 
-        /**
-         * Sets fields to defaults.
-         * Use read() load metadata from file.
-         */
-        StorageEngineMetadata(const std::string& dbpath);
+    virtual ~StorageEngineMetadata();
 
-        virtual ~StorageEngineMetadata();
+    /**
+     * Returns name of storage engine in metadata.
+     */
+    const std::string& getStorageEngine() const;
 
-        /**
-         * Returns name of storage engine in metadata.
-         */
-        const std::string& getStorageEngine() const;
+    /**
+     * Returns storage engine options in metadata.
+     */
+    const BSONObj& getStorageEngineOptions() const;
 
-        /**
-         * Returns storage engine options in metadata.
-         */
-        const BSONObj& getStorageEngineOptions() const;
+    /**
+     * Sets name of storage engine in metadata.
+     */
+    void setStorageEngine(const std::string& storageEngine);
 
-        /**
-         * Sets name of storage engine in metadata.
-         */
-        void setStorageEngine(const std::string& storageEngine);
+    /**
+     * Sets storage engine options in metadata.
+     */
+    void setStorageEngineOptions(const BSONObj& storageEngineOptions);
 
-        /**
-         * Sets storage engine options in metadata.
-         */
-        void setStorageEngineOptions(const BSONObj& storageEngineOptions);
+    /**
+     * Resets fields to default values.
+     */
+    void reset();
 
-        /**
-         * Resets fields to default values.
-         */
-        void reset();
+    /**
+     * Reads metadata from 'storage.bson' in 'dbpath' directory.
+     */
+    Status read();
 
-        /**
-         * Reads metadata from 'storage.bson' in 'dbpath' directory.
-         */
-        Status read();
+    /**
+     * Writes metadata to file.
+     */
+    Status write() const;
 
-        /**
-         * Writes metadata to file.
-         */
-        Status write() const;
+    /**
+     * Validates a single field in the storage engine options.
+     * Currently, only boolean fields are supported.
+     */
+    template <typename T>
+    Status validateStorageEngineOption(StringData fieldName, T expectedValue) const;
 
-        /**
-         * Validates a single field in the storage engine options.
-         * Currently, only boolean fields are supported.
-         */
-        template <typename T>
-        Status validateStorageEngineOption(StringData fieldName, T expectedValue) const;
-
-    private:
-        std::string _dbpath;
-        std::string _storageEngine;
-        BSONObj _storageEngineOptions;
-    };
+private:
+    std::string _dbpath;
+    std::string _storageEngine;
+    BSONObj _storageEngineOptions;
+};
 
 }  // namespace mongo

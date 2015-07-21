@@ -2,8 +2,9 @@
 
 # This SConscript describes build rules for the "mongo" project.
 
-import os
 import itertools
+import os
+import re
 import subprocess
 import sys
 from buildscripts import utils
@@ -14,6 +15,7 @@ Import("env")
 Import("has_option")
 Import("get_option")
 Import("usev8")
+Import("usemozjs")
 Import("use_system_version_of_library")
 
 # Boost we need everywhere. 's2' is spammed in all over the place by
@@ -29,6 +31,7 @@ env.SConscript(
         'crypto',
         'db',
         'dbtests',
+        'executor',
         'installer',
         'logger',
         'platform',
@@ -86,11 +89,44 @@ if env.TargetOSIs('windows'):
 
 module_list = '{ %s }' % ', '.join([ '"{0}"'.format(x) for x in env['MONGO_MODULES'] ])
 
-versionInfo = env.Substfile(
+# This generates a numeric representation of the version string so that
+# you can easily compare versions of MongoDB without having to parse
+# the version string.
+#
+# The rules for this are
+# {major}{minor}{release}{pre/rc/final}
+# If the version is pre-release and not an rc, the final number is 0
+# If the version is an RC, the final number of 1 + rc number
+# If the version is pre-release between RC's, the final number is 1 + rc number
+# If the version is a final release, the final number is 99
+#
+# Examples:
+# 3.1.1-123     = 3010100
+# 3.1.1-rc2     = 3010103
+# 3.1.1-rc2-123 = 3010103
+# 3.1.1         = 3010199
+#
+version_parts = [ x for x in re.match(r'^(\d+)\.(\d+)\.(\d+)-?((?:(rc)(\d+))?.*)?',
+    env['MONGO_VERSION']).groups() ]
+version_extra = version_parts[3] if version_parts[3] else ""
+if version_parts[4] == 'rc':
+    version_parts[3] = int(version_parts[5]) + -50
+elif version_parts[3]:
+    version_parts[3] = -100
+else:
+    version_parts[3] = 0
+version_parts = [ int(x) for x in version_parts[:4]]
+
+generatedVersionFile = env.Substfile(
     'util/version.cpp.in',
     SUBST_DICT=[
-        ('@mongo_code_version@', env['MONGO_CODE_VERSION']),
-        ('@buildinfo_git_version@', env['MONGO_GIT_VERSION']),
+        ('@mongo_version@', env['MONGO_VERSION']),
+        ('@mongo_version_major@', version_parts[0]),
+        ('@mongo_version_minor@', version_parts[1]),
+        ('@mongo_version_patch@', version_parts[2]),
+        ('@mongo_version_extra@', version_parts[3]),
+        ('@mongo_version_extra_str@', version_extra),
+        ('@mongo_git_hash@', env['MONGO_GIT_HASH']),
         ('@buildinfo_js_engine@', js_engine_ver),
         ('@buildinfo_allocator@', GetOption('allocator')),
         ('@buildinfo_ccflags@', env['CCFLAGS']),
@@ -104,20 +140,22 @@ versionInfo = env.Substfile(
         ('@buildinfo_cc_version@', get_toolchain_ver('CC')),
         ('@buildinfo_cxx_version@', get_toolchain_ver('CXX')),
     ])
+env.Alias('generated-sources', generatedVersionFile)
 
 config_header_substs = (
     ('@mongo_config_byte_order@', 'MONGO_CONFIG_BYTE_ORDER'),
     ('@mongo_config_debug_build@', 'MONGO_CONFIG_DEBUG_BUILD'),
+    ('@mongo_config_have_thread_local@', 'MONGO_CONFIG_HAVE_THREAD_LOCAL'),
     ('@mongo_config_have___declspec_thread@', 'MONGO_CONFIG_HAVE___DECLSPEC_THREAD'),
     ('@mongo_config_have___thread@', 'MONGO_CONFIG_HAVE___THREAD'),
     ('@mongo_config_have_execinfo_backtrace@', 'MONGO_CONFIG_HAVE_EXECINFO_BACKTRACE'),
+    ('@mongo_config_have_fips_mode_set@', 'MONGO_CONFIG_HAVE_FIPS_MODE_SET'),
     ('@mongo_config_have_header_unistd_h@', 'MONGO_CONFIG_HAVE_HEADER_UNISTD_H'),
     ('@mongo_config_have_posix_monotonic_clock@', 'MONGO_CONFIG_HAVE_POSIX_MONOTONIC_CLOCK'),
     ('@mongo_config_have_std_is_trivially_copyable@', 'MONGO_CONFIG_HAVE_STD_IS_TRIVIALLY_COPYABLE'),
     ('@mongo_config_have_std_make_unique@', 'MONGO_CONFIG_HAVE_STD_MAKE_UNIQUE'),
     ('@mongo_config_optimized_build@', 'MONGO_CONFIG_OPTIMIZED_BUILD'),
     ('@mongo_config_ssl@', 'MONGO_CONFIG_SSL'),
-    ('@mongo_config_ssl_fips@', 'MONGO_CONFIG_SSL_FIPS'),
     ('@mongo_config_use_gdbserver@', 'MONGO_CONFIG_USE_GDBSERVER'),
 )
 
@@ -128,10 +166,11 @@ def makeConfigHeaderDefine(self, key):
     return val
 env.AddMethod(makeConfigHeaderDefine)
 
-configHeaderFile = env.Substfile(
+generateConfigHeaderFile = env.Substfile(
     'config.h.in',
     SUBST_DICT=[(k, env.makeConfigHeaderDefine(v)) for (k, v) in config_header_substs]
 )
+env.Alias('generated-sources', generateConfigHeaderFile)
 
 env.Library('version',
             [
@@ -141,12 +180,6 @@ env.Library('version',
                 'bson/bson',
                 '$BUILD_DIR/mongo/base/base'
             ])
-
-env.CppUnitTest(
-    target="util/version_test",
-    source=["util/version_test.cpp"],
-    LIBDEPS=[]
-)
 
 mongod = env.Program(
     target="mongod",
@@ -161,6 +194,9 @@ mongod = env.Program(
         "db/mongodandmongos",
         "db/mongodwebserver",
         "db/serveronly",
+        "db/repl/storage_interface_impl",
+        "executor/network_interface_factory",
+        's/commands/shared_cluster_commands',
         "util/ntservice",
     ],
 )
@@ -197,16 +233,17 @@ env.Install(
             "s/mongos_options_init.cpp",
         ],
         LIBDEPS=[
-            's/catalog/legacy/catalog_manager_legacy',
+            'db/conn_pool_options',
+            'db/coredb',
+            'db/mongodandmongos',
             's/client/sharding_connection_hook',
             's/commands/cluster_commands',
-            "s/mongoscore",
-            "db/coredb",
-            "s/coreshard",
-            "util/ntservice",
-            "db/mongodandmongos",
-            "db/conn_pool_options",
-            '$BUILD_DIR/mongo/util/options_parser/options_parser_init',
+            's/commands/shared_cluster_commands',
+            's/coreshard',
+            's/mongoscore',
+            's/sharding_initialization',
+            'util/ntservice',
+            'util/options_parser/options_parser_init',
         ]))
 
 # --- sniffer ---
@@ -230,7 +267,7 @@ if env.TargetOSIs('osx') or env["_HAVEPCAP"]:
 
 # --- shell ---
 
-if not has_option('noshell') and usev8:
+if not has_option('noshell') and (usev8 or usemozjs):
     shell_core_env = env.Clone()
     if has_option("safeshell"):
         shell_core_env.Append(CPPDEFINES=["MONGO_SAFE_SHELL"])
@@ -284,21 +321,53 @@ else:
 # binaries
 
 distBinaries = []
-
-if env.TargetOSIs('windows'):
-    distBinaries.extend(['mongod.pdb', 'mongos.pdb'])
+distDebugSymbols = []
 
 def add_exe( v ):
     return "${PROGPREFIX}%s${PROGSUFFIX}" % v
 
+def failMissingObjCopy(env, target, source):
+    env.FatalError("Generating debug symbols requires objcopy, please set the OBJCOPY variable.")
+
 def installBinary( e, name ):
+    debug_sym_name = name
     name = add_exe( name )
 
-    if env.TargetOSIs('solaris', 'linux') and (not has_option("nostrip")):
-        name = e.Command('stripped/%s' % name, name, Copy('$TARGET', '$SOURCE'))[0]
-        e.AddPostAction(name, 'strip $TARGET')
+    debug_sym_cmd = None
+    if e.TargetOSIs('linux', 'solaris'):
+        if 'OBJCOPY' not in e:
+            debug_sym_cmd = failMissingObjCopy
+        else:
+            debug_sym_cmd = '${OBJCOPY} --only-keep-debug ${SOURCE} ${TARGET}'
+        debug_sym_name += '.debug'
+    elif e.TargetOSIs('osx'):
+        debug_sym_name += '.dSYM'
+        debug_sym_cmd = 'dsymutil -o ${TARGET} ${SOURCE}'
+    elif e.ToolchainIs('msvc'):
+        debug_sym_name += '.pdb'
+        distBinaries.append(debug_sym_name)
+        distDebugSymbols.append(debug_sym_name)
 
-    distBinaries.append(name)
+    if debug_sym_cmd:
+        debug_sym = e.Command(
+            debug_sym_name,
+            name,
+            debug_sym_cmd
+        )
+        e.Install("#/", debug_sym)
+        e.Alias('debugsymbols', debug_sym)
+        distDebugSymbols.append(debug_sym)
+
+    if env.TargetOSIs('linux', 'solaris') and (not has_option("nostrip")):
+        strip_cmd = e.Command(
+            'stripped/%s' % name,
+            [name, debug_sym],
+            '${OBJCOPY} --strip-debug --add-gnu-debuglink ${SOURCES[1]} ${SOURCES[0]} $TARGET'
+        )
+        distBinaries.append('stripped/%s' % name)
+    else:
+        distBinaries.append(name)
+
     inst = e.Install( "$INSTALL_DIR/bin", name )
 
     if env.TargetOSIs('posix'):
@@ -344,7 +413,8 @@ env.Alias( "core", [ '#/%s' % b for b in [ add_exe( "mongo" ), add_exe( "mongod"
 # Stage the top-level mongodb banners
 distsrc = env.Dir('#distsrc')
 env.Append(MODULE_BANNERS = [distsrc.File('README'),
-                             distsrc.File('THIRD-PARTY-NOTICES')])
+                             distsrc.File('THIRD-PARTY-NOTICES'),
+                             distsrc.File('MPL-2')])
 
 # If no module has introduced a file named LICENSE.txt, then inject the AGPL.
 if sum(itertools.imap(lambda x: x.name == "LICENSE.txt", env['MODULE_BANNERS'])) == 0:
@@ -374,15 +444,22 @@ for full_dir, archive_dir in env["ARCHIVE_ADDITION_DIR_MAP"].items():
 # Attempts to build release artifacts without tools must fail
 if has_option("use-new-tools"):
     env.Command(
-        '#/${SERVER_ARCHIVE}',
-        ['#buildscripts/make_archive.py'] + env["MODULE_BANNERS"] + env["ARCHIVE_ADDITIONS"] +
-        distBinaries, ' '.join(['$PYTHON ${SOURCES[0]} -o $TARGET'] + archive_addition_transforms +
-        module_banner_transforms + [
-                '--transform ${str(Dir(BUILD_DIR))}/mongo/stripped=$SERVER_DIST_BASENAME/bin',
-                '--transform ${str(Dir(BUILD_DIR))}/mongo=$SERVER_DIST_BASENAME/bin',
-                '--transform ${str(Dir(BUILD_DIR))}/mongo/stripped/src/mongo-tools=$SERVER_DIST_BASENAME/bin',
+        target='#/${SERVER_ARCHIVE}',
+        source=['#buildscripts/make_archive.py'] + env["MODULE_BANNERS"] + env["ARCHIVE_ADDITIONS"] + distBinaries,
+        action=' '.join(
+            ['$PYTHON ${SOURCES[0]} -o $TARGET'] +
+            archive_addition_transforms +
+            module_banner_transforms +
+            [
+                '--transform $BUILD_DIR/mongo/stripped=$SERVER_DIST_BASENAME/bin',
+                '--transform $BUILD_DIR/mongo=$SERVER_DIST_BASENAME/bin',
+                '--transform $BUILD_DIR/mongo/stripped/src/mongo-tools=$SERVER_DIST_BASENAME/bin',
                 '--transform src/mongo-tools=$SERVER_DIST_BASENAME/bin',
-                '${TEMPFILE(SOURCES[1:])}']))
+                '${TEMPFILE(SOURCES[1:])}'
+            ],
+        ),
+        BUILD_DIR=env.Dir('$BUILD_DIR').path
+    )
 
     env.Alias("dist", source='#/${SERVER_ARCHIVE}')
 else:
@@ -391,6 +468,13 @@ else:
     env.Alias("dist", [], [ failDist ] )
     env.AlwaysBuild("dist")
 
+debug_symbols_dist = env.Command(
+    target='#/${SERVER_DIST_BASENAME}-debugsymbols${DIST_ARCHIVE_SUFFIX}',
+    source=['#buildscripts/make_archive.py'] + distDebugSymbols,
+    action='$PYTHON ${SOURCES[0]} -o $TARGET --transform $BUILD_DIR/mongo=$SERVER_DIST_BASENAME ${TEMPFILE(SOURCES[1:])}',
+    BUILD_DIR=env.Dir('$BUILD_DIR').path
+)
+env.Alias('dist-debugsymbols', debug_symbols_dist)
 
 #final alias
 env.Alias( "install", "$INSTALL_DIR" )

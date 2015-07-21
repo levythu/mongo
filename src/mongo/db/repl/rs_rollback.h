@@ -28,40 +28,65 @@
 
 #pragma once
 
+#include "mongo/base/disallow_copying.h"
+#include "mongo/base/status.h"
+#include "mongo/base/status_with.h"
+#include "mongo/db/jsobj.h"
+#include "mongo/stdx/functional.h"
+#include "mongo/util/time_support.h"
+
 namespace mongo {
-    class OperationContext;
-    class Timestamp;
+
+class DBClientConnection;
+class NamespaceString;
+class OperationContext;
 
 namespace repl {
-    class OplogReader; 
-    class ReplicationCoordinator;
 
-    /**
-     * Initiates the rollback process.
-     * This function assumes the preconditions for undertaking rollback have already been met;
-     * we have ops in our oplog that our sync source does not have, and we are not currently
-     * PRIMARY.
-     * The rollback procedure is:
-     * - find the common point between this node and its sync source
-     * - undo operations by fetching all documents affected, then replaying
-     *   the sync source's oplog until we reach the time in the oplog when we fetched the last
-     *   document.
-     * This function can throw std::exception on failures.
-     * This function runs a command on the sync source to detect if the sync source rolls back
-     * while our rollback is in progress.
-     * 
-     * @param txn Used to read and write from this node's databases
-     * @param lastOpTimeWritten The last OpTime applied by the applier
-     * @param oplogreader Must already be connected to a sync source.  Used to fetch documents.
-     * @param replCoord Used to track the rollback ID and to change the follower state
-     * 
-     * Failures: some failure cases are fatal; others throw std::exception.
-     */
+class OplogInterface;
+class OpTime;
+class ReplicationCoordinator;
+class RollbackSource;
 
-    void syncRollback(OperationContext* txn,
-                      Timestamp lastOpTimeWritten,
-                      OplogReader* oplogreader,
-                      ReplicationCoordinator* replCoord);
+/**
+ * Initiates the rollback process.
+ * This function assumes the preconditions for undertaking rollback have already been met;
+ * we have ops in our oplog that our sync source does not have, and we are not currently
+ * PRIMARY.
+ * The rollback procedure is:
+ * - find the common point between this node and its sync source
+ * - undo operations by fetching all documents affected, then replaying
+ *   the sync source's oplog until we reach the time in the oplog when we fetched the last
+ *   document.
+ * This function can throw std::exception on failures.
+ * This function runs a command on the sync source to detect if the sync source rolls back
+ * while our rollback is in progress.
+ *
+ * @param txn Used to read and write from this node's databases
+ * @param lastOpTimeWritten The last OpTime applied by the applier
+ * @param localOplog reads the oplog on this server.
+ * @param rollbackSource interface for sync source:
+ *            provides oplog; and
+ *            supports fetching documents and copying collections.
+ * @param replCoord Used to track the rollback ID and to change the follower state
+ *
+ * Failures: Most failures are returned as a status but some failures throw an std::exception.
+ */
 
-}
-}
+using SleepSecondsFn = stdx::function<void(Seconds)>;
+
+Status syncRollback(OperationContext* txn,
+                    const OpTime& lastOpTimeWritten,
+                    const OplogInterface& localOplog,
+                    const RollbackSource& rollbackSource,
+                    ReplicationCoordinator* replCoord,
+                    const SleepSecondsFn& sleepSecondsFn);
+
+Status syncRollback(OperationContext* txn,
+                    const OpTime& lastOpTimeWritten,
+                    const OplogInterface& localOplog,
+                    const RollbackSource& rollbackSource,
+                    ReplicationCoordinator* replCoord);
+
+}  // namespace repl
+}  // namespace mongo

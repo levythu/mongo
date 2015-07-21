@@ -32,29 +32,42 @@
 
 namespace mongo {
 
-    struct ReadPreferenceSetting;
-    struct HostAndPort;
-    template<typename T> class StatusWith;
+class ConnectionString;
+struct ReadPreferenceSetting;
+struct HostAndPort;
+template <typename T>
+class StatusWith;
 
+/**
+ * Interface encapsulating the targeting logic for a given replica set or a standalone host.
+ */
+class RemoteCommandTargeter {
+    MONGO_DISALLOW_COPYING(RemoteCommandTargeter);
+
+public:
+    virtual ~RemoteCommandTargeter() = default;
 
     /**
-     * Interface encapsulating the targeting logic for a given replica set or a standalone host.
+     * Retrieves the full connection string for the replica set or standalone host which are
+     * represented by this targeter. This value is always constant for a standalone host and may
+     * vary for replica sets as hosts are added, discovered and removed during the lifetime of the
+     * set.
      */
-    class RemoteCommandTargeter {
-        MONGO_DISALLOW_COPYING(RemoteCommandTargeter);
-    public:
-        virtual ~RemoteCommandTargeter() = default;
+    virtual ConnectionString connectionString() = 0;
 
-        /**
-         * Obtains a host, which matches the read preferences specified by readPref.
-         *
-         * Returns OK and a host and port to use for the specified read preference. Otherwise may
-         *      return any ErrorCode.
-         */
-        virtual StatusWith<HostAndPort> findHost(const ReadPreferenceSetting& readPref) = 0;
+    /**
+     * Obtains a host, which matches the read preferences specified by readPref.
+     *
+     * Returns OK and a host and port to use for the specified read preference or any
+     * ErrorCode. Known error codes are:
+     *      NotMaster if readPref is PrimaryOnly and there is no primary in the set
+     *      FailedToSatisfyReadPreference if it cannot find a node to match the read preference
+     *          and the readPref is anything other than PrimaryOnly
+     */
+    virtual StatusWith<HostAndPort> findHost(const ReadPreferenceSetting& readPref) = 0;
 
-    protected:
-        RemoteCommandTargeter() = default;
-    };
+protected:
+    RemoteCommandTargeter() = default;
+};
 
-} // namespace mongo
+}  // namespace mongo

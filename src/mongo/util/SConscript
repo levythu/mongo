@@ -9,7 +9,6 @@ env.SConscript(
     dirs=[
         'cmdline_utils',
         'concurrency',
-        'mongoutils',
         'net',
         'options_parser',
     ],
@@ -101,11 +100,12 @@ env.Library(
         "startup_test.cpp",
         "touch_pages.cpp",
         'assert_util.cpp',
-        'concurrency/mutex.cpp',
         'exception_filter_win32.cpp',
         'file.cpp',
         'log.cpp',
         'platform_init.cpp',
+        'static_observer.cpp',
+        'system_tick_source.cpp',
         'text.cpp',
         'thread_safe_string.cpp',
         'time_support.cpp',
@@ -118,11 +118,17 @@ env.Library(
         '$BUILD_DIR/mongo/util/stacktrace',
         '$BUILD_DIR/mongo/util/concurrency/synchronization',
         '$BUILD_DIR/mongo/util/concurrency/thread_name',
-        '$BUILD_DIR/mongo/util/concurrency/thread_pool',
         '$BUILD_DIR/mongo/util/debugger',
         '$BUILD_DIR/third_party/shim_allocator',
         '$BUILD_DIR/third_party/shim_boost',
         '$BUILD_DIR/third_party/shim_tz',
+    ],
+)
+
+env.Library(
+    target='tick_source_mock',
+    source=[
+        'tick_source_mock.cpp',
     ],
 )
 
@@ -244,7 +250,7 @@ if get_option('allocator') == 'tcmalloc':
         # level configure check, though its effects should still be scoped just to these files.
         tcmspEnv.Append(
             CPPDEFINES=[
-                'MONGO_HAVE_GPERFTOOLS_GET_THREAD_CACHE_SIZE'
+                'MONGO_HAVE_GPERFTOOLS_SHRINK_CACHE_SIZE'
             ]
         )
 
@@ -347,6 +353,17 @@ env.Library(
         "stacktrace",
     ],
 )
+
+if not env.TargetOSIs('windows'):
+    env.CppUnitTest(
+        target='signal_handlers_synchronous_test',
+        source=[
+            'signal_handlers_synchronous_test.cpp',
+        ],
+        LIBDEPS=[
+            'signal_handlers_synchronous',
+        ],
+    )
 
 env.Library(
     target="signal_handlers",

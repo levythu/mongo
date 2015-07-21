@@ -24,7 +24,7 @@ var db;
 
              // Notes:
 
-             // apply_ops1, apply_ops2: nothing works, dunno why yet. SERVER-1439.
+             // apply_ops*: mongos doesn't implement "applyOps" -- SERVER-1439.
 
              // copydb, copydb2: copyDatabase seems not to work at all in
              //                  the ShardingTest setup.  SERVER-1440.
@@ -55,7 +55,7 @@ var db;
              // commands weren't implemented:
              // clean cloneCollectionAsCapped copydbgetnonce dataSize
              // datasize dbstats deleteIndexes dropIndexes forceerror
-             // getnonce logout medianKey profile reIndex repairDatabase
+             // getnonce logout profile reIndex repairDatabase
              // reseterror splitVector validate top
 
              /* missing commands :
@@ -89,12 +89,13 @@ var db;
                                                      'unix_socket\\d*|' +
                                                      // TODO: SERVER-17284 remove once find cmd is
                                                      // implemented in mongos
+                                                     'find_getmore_bsonsize|' +
+                                                     'find_getmore_cmd|' +
                                                      'read_after_optime' +
                                                      ')\.js$');
 
              // These are bugs (some might be fixed now):
              var mightBeFixedPattern = new RegExp('[\\/\\\\](' +
-                                                  'apply_ops[12]|' +
                                                   'count5|' +
                                                   'cursor8|' +
                                                   'or4|' +
@@ -109,6 +110,7 @@ var db;
 
              // These aren't supposed to get run under sharding:
              var notForShardingPattern = new RegExp('[\\/\\\\](' +
+                                                    'apply_ops.*|' + // mongos has no applyOps cmd
                                                     'dbadmin|' +
                                                     'error1|' +
                                                     'fsync|' +

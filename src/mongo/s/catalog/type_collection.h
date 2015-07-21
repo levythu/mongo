@@ -32,103 +32,115 @@
 #include <string>
 
 #include "mongo/db/jsobj.h"
+#include "mongo/db/keypattern.h"
 #include "mongo/db/namespace_string.h"
 
 namespace mongo {
 
-    class BSONObj;
-    class Status;
-    template<typename T> class StatusWith;
+class Status;
+template <typename T>
+class StatusWith;
+
+
+/**
+ * This class represents the layout and contents of documents contained in the
+ * config.collections collection. All manipulation of documents coming from that collection
+ * should be done with this class.
+ */
+class CollectionType {
+public:
+    // Name of the collections collection in the config server.
+    static const std::string ConfigNS;
+
+    static const BSONField<std::string> fullNs;
+    static const BSONField<OID> epoch;
+    static const BSONField<Date_t> updatedAt;
+    static const BSONField<BSONObj> keyPattern;
+    static const BSONField<bool> unique;
+    static const BSONField<bool> noBalance;
+    static const BSONField<bool> dropped;
 
 
     /**
-     * This class represents the layout and contents of documents contained in the
-     * config.collections collection. All manipulation of documents coming from that collection
-     * should be done with this class.
+     * Constructs a new DatabaseType object from BSON. Also does validation of the contents.
      */
-    class CollectionType {
-    public:
-        // Name of the collections collection in the config server.
-        static const std::string ConfigNS;
+    static StatusWith<CollectionType> fromBSON(const BSONObj& source);
 
-        static const BSONField<std::string> fullNs;
-        static const BSONField<OID> epoch;
-        static const BSONField<Date_t> updatedAt;
-        static const BSONField<BSONObj> keyPattern;
-        static const BSONField<bool> unique;
-        static const BSONField<bool> noBalance;
-        static const BSONField<bool> dropped;
+    /**
+     * Returns OK if all fields have been set. Otherwise returns NoSuchKey and information
+     * about what is the first field which is missing.
+     */
+    Status validate() const;
 
+    /**
+     * Returns the BSON representation of the entry.
+     */
+    BSONObj toBSON() const;
 
-        CollectionType();
+    /**
+     * Returns a std::string representation of the current internal state.
+     */
+    std::string toString() const;
 
-        /**
-         * Constructs a new DatabaseType object from BSON. Also does validation of the contents.
-         */
-        static StatusWith<CollectionType> fromBSON(const BSONObj& source);
+    const NamespaceString& getNs() const {
+        return _fullNs.get();
+    }
+    void setNs(const NamespaceString& fullNs);
 
-        /**
-         * Returns OK if all fields have been set. Otherwise returns NoSuchKey and information
-         * about what is the first field which is missing.
-         */
-        Status validate() const;
+    OID getEpoch() const {
+        return _epoch.get();
+    }
+    void setEpoch(OID epoch);
 
-        /**
-         * Returns the BSON representation of the entry.
-         */
-        BSONObj toBSON() const;
+    Date_t getUpdatedAt() const {
+        return _updatedAt.get();
+    }
+    void setUpdatedAt(Date_t updatedAt);
 
-        /**
-         * Clears the internal state.
-         */
-        void clear();
+    bool getDropped() const {
+        return _dropped.get_value_or(false);
+    }
+    void setDropped(bool dropped) {
+        _dropped = dropped;
+    }
 
-        /**
-         * Returns a std::string representation of the current internal state.
-         */
-        std::string toString() const;
+    const KeyPattern& getKeyPattern() const {
+        return _keyPattern.get();
+    }
+    void setKeyPattern(const KeyPattern& keyPattern);
 
-        const NamespaceString& getNs() const { return _fullNs.get(); }
-        void setNs(const NamespaceString& fullNs);
+    bool getUnique() const {
+        return _unique.get_value_or(false);
+    }
+    void setUnique(bool unique) {
+        _unique = unique;
+    }
 
-        OID getEpoch() const { return _epoch.get(); }
-        void setEpoch(OID epoch);
+    bool getAllowBalance() const {
+        return _allowBalance.get_value_or(true);
+    }
 
-        Date_t getUpdatedAt() const { return _updatedAt.get(); }
-        void setUpdatedAt(Date_t updatedAt);
+private:
+    // Required full namespace (with the database prefix).
+    boost::optional<NamespaceString> _fullNs;
 
-        bool getDropped() const { return _dropped.get_value_or(false); }
-        void setDropped(bool dropped) { _dropped = dropped; }
+    // Required to disambiguate collection namespace incarnations.
+    boost::optional<OID> _epoch;
 
-        const BSONObj& getKeyPattern() const { return _keyPattern.get(); }
-        void setKeyPattern(const BSONObj& keyPattern);
+    // Required last updated time.
+    boost::optional<Date_t> _updatedAt;
 
-        bool getUnique() const { return _unique.get_value_or(false); }
-        void setUnique(bool unique) { _unique = unique; }
+    // Optional, whether the collection has been dropped. If missing, implies false.
+    boost::optional<bool> _dropped;
 
-        bool getAllowBalance() const { return _allowBalance.get_value_or(true); }
+    // Sharding key. Required, if collection is not dropped.
+    boost::optional<KeyPattern> _keyPattern;
 
-    private:
-        // Required full namespace (with the database prefix).
-        boost::optional<NamespaceString> _fullNs;
+    // Optional uniqueness of the sharding key. If missing, implies false.
+    boost::optional<bool> _unique;
 
-        // Required to disambiguate collection namespace incarnations.
-        boost::optional<OID> _epoch;
+    // Optional whether balancing is allowed for this collection. If missing, implies true.
+    boost::optional<bool> _allowBalance;
+};
 
-        // Required last updated time.
-        boost::optional<Date_t> _updatedAt;
-
-        // Optional, whether the collection has been dropped. If missing, implies false.
-        boost::optional<bool> _dropped;
-
-        // Sharding key. Required, if collection is not dropped.
-        boost::optional<BSONObj> _keyPattern;
-
-        // Optional uniqueness of the sharding key. If missing, implies false.
-        boost::optional<bool> _unique;
-
-        // Optional whether balancing is allowed for this collection. If missing, implies true.
-        boost::optional<bool> _allowBalance;
-    };
-
-} // namespace mongo
+}  // namespace mongo

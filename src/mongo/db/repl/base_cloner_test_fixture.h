@@ -28,8 +28,7 @@
 
 #pragma once
 
-#include <boost/thread/mutex.hpp>
-#include <boost/thread/condition_variable.hpp>
+#include <memory>
 #include <vector>
 
 #include "mongo/base/status.h"
@@ -37,124 +36,134 @@
 #include "mongo/db/clientcursor.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/repl/collection_cloner.h"
-#include "mongo/db/repl/network_interface_mock.h"
 #include "mongo/db/repl/replication_executor_test_fixture.h"
+#include "mongo/executor/network_interface_mock.h"
+#include "mongo/stdx/mutex.h"
+#include "mongo/stdx/condition_variable.h"
 #include "mongo/util/net/hostandport.h"
 
 namespace mongo {
 
-    struct CollectionOptions;
-    class OperationContext;
+struct CollectionOptions;
+class OperationContext;
 
 namespace repl {
 
-    class BaseCloner;
+class BaseCloner;
+class ClonerStorageInterfaceMock;
 
-    class BaseClonerTest : public ReplicationExecutorTest {
-    public:
-        typedef NetworkInterfaceMock::NetworkOperationIterator NetworkOperationIterator;
+class BaseClonerTest : public ReplicationExecutorTest {
+public:
+    typedef executor::NetworkInterfaceMock::NetworkOperationIterator NetworkOperationIterator;
 
-        /**
-         * Creates an initial error status suitable for checking if
-         * cloner has modified the 'status' field in test fixture.
-         */
-        static Status getDetectableErrorStatus();
+    /**
+     * Creates a cursor response with given array of documents.
+     */
+    static BSONObj createCursorResponse(CursorId cursorId,
+                                        const std::string& ns,
+                                        const BSONArray& docs,
+                                        const char* batchFieldName);
 
-        /**
-         * Creates a cursor response with given array of documents.
-         */
-        static BSONObj createCursorResponse(CursorId cursorId,
-                                            const std::string& ns,
-                                            const BSONArray& docs,
-                                            const char* batchFieldName);
+    static BSONObj createCursorResponse(CursorId cursorId,
+                                        const BSONArray& docs,
+                                        const char* batchFieldName);
 
-        static BSONObj createCursorResponse(CursorId cursorId,
-                                            const BSONArray& docs,
-                                            const char* batchFieldName);
+    static BSONObj createCursorResponse(CursorId cursorId, const BSONArray& docs);
 
-        static BSONObj createCursorResponse(CursorId cursorId,
-                                            const BSONArray& docs);
-
-        /**
-         * Creates a listCollections response with given array of index specs.
-         */
-        static BSONObj createListCollectionsResponse(CursorId cursorId,
-                                                     const BSONArray& colls,
-                                                     const char* batchFieldName);
-
-        static BSONObj createListCollectionsResponse(CursorId cursorId, const BSONArray& colls);
-
-        /**
-         * Creates a listIndexes response with given array of index specs.
-         */
-        static BSONObj createListIndexesResponse(CursorId cursorId,
-                                                 const BSONArray& specs,
+    /**
+     * Creates a listCollections response with given array of index specs.
+     */
+    static BSONObj createListCollectionsResponse(CursorId cursorId,
+                                                 const BSONArray& colls,
                                                  const char* batchFieldName);
 
-        static BSONObj createListIndexesResponse(CursorId cursorId, const BSONArray& specs);
+    static BSONObj createListCollectionsResponse(CursorId cursorId, const BSONArray& colls);
 
-        static const HostAndPort target;
-        static const NamespaceString nss;
-        static const BSONObj idIndexSpec;
+    /**
+     * Creates a listIndexes response with given array of index specs.
+     */
+    static BSONObj createListIndexesResponse(CursorId cursorId,
+                                             const BSONArray& specs,
+                                             const char* batchFieldName);
 
-        BaseClonerTest();
+    static BSONObj createListIndexesResponse(CursorId cursorId, const BSONArray& specs);
 
-        void setUp() override;
-        void tearDown() override;
+    static const HostAndPort target;
+    static const NamespaceString nss;
+    static const BSONObj idIndexSpec;
 
-        virtual void clear();
+    BaseClonerTest();
 
-        void setStatus(const Status& status);
-        const Status& getStatus() const;
-        void waitForStatus();
+    virtual void clear();
 
-        void scheduleNetworkResponse(NetworkOperationIterator noi,
-                                     const BSONObj& obj);
-        void scheduleNetworkResponse(NetworkOperationIterator noi,
-                                     ErrorCodes::Error code, const std::string& reason);
-        void scheduleNetworkResponse(const BSONObj& obj);
-        void scheduleNetworkResponse(ErrorCodes::Error code, const std::string& reason);
-        void processNetworkResponse(const BSONObj& obj);
-        void processNetworkResponse(ErrorCodes::Error code, const std::string& reason);
-        void finishProcessingNetworkResponse();
+    void setStatus(const Status& status);
+    const Status& getStatus() const;
 
-        /**
-         * Tests life cycle functionality.
-         */
-        virtual BaseCloner* getCloner() const = 0;
-        void testLifeCycle();
+    void scheduleNetworkResponse(NetworkOperationIterator noi, const BSONObj& obj);
+    void scheduleNetworkResponse(NetworkOperationIterator noi,
+                                 ErrorCodes::Error code,
+                                 const std::string& reason);
+    void scheduleNetworkResponse(const BSONObj& obj);
+    void scheduleNetworkResponse(ErrorCodes::Error code, const std::string& reason);
+    void processNetworkResponse(const BSONObj& obj);
+    void processNetworkResponse(ErrorCodes::Error code, const std::string& reason);
+    void finishProcessingNetworkResponse();
 
-    private:
+    /**
+     * Tests life cycle functionality.
+     */
+    virtual BaseCloner* getCloner() const = 0;
+    void testLifeCycle();
 
-        // Protects member data of this base cloner fixture.
-        mutable boost::mutex _mutex;
+protected:
+    void setUp() override;
+    void tearDown() override;
 
-        boost::condition_variable _setStatusCondition;
+    std::unique_ptr<ClonerStorageInterfaceMock> storageInterface;
 
-        Status _status;
+private:
+    // Protects member data of this base cloner fixture.
+    mutable stdx::mutex _mutex;
 
-    };
+    stdx::condition_variable _setStatusCondition;
 
-    class StorageInterfaceMock : public CollectionCloner::StorageInterface {
-    public:
-        Status beginCollection(OperationContext* txn,
-                               const NamespaceString& nss,
-                               const CollectionOptions& options,
-                               const std::vector<BSONObj>& specs) override;
+    Status _status;
+};
 
-        Status insertDocuments(OperationContext* txn,
-                               const NamespaceString& nss,
-                               const std::vector<BSONObj>& docs) override;
+class ClonerStorageInterfaceMock : public CollectionCloner::StorageInterface {
+public:
+    using InsertCollectionFn = stdx::function<Status(
+        OperationContext*, const NamespaceString&, const std::vector<BSONObj>&)>;
+    using BeginCollectionFn = stdx::function<Status(OperationContext*,
+                                                    const NamespaceString&,
+                                                    const CollectionOptions&,
+                                                    const std::vector<BSONObj>&)>;
+    using InsertMissingDocFn =
+        stdx::function<Status(OperationContext*, const NamespaceString&, const BSONObj&)>;
+    using DropUserDatabases = stdx::function<Status(OperationContext*)>;
 
-        stdx::function<Status (OperationContext*,
-                               const NamespaceString&,
-                               const CollectionOptions&,
-                               const std::vector<BSONObj>&)> beginCollectionFn;
+    Status beginCollection(OperationContext* txn,
+                           const NamespaceString& nss,
+                           const CollectionOptions& options,
+                           const std::vector<BSONObj>& specs) override;
 
-        stdx::function<Status (OperationContext*,
-                               const NamespaceString&,
-                               const std::vector<BSONObj>&)> insertDocumentsFn;
-    };
+    Status insertDocuments(OperationContext* txn,
+                           const NamespaceString& nss,
+                           const std::vector<BSONObj>& docs) override;
 
-} // namespace repl
-} // namespace mongo
+    Status commitCollection(OperationContext* txn, const NamespaceString& nss) override;
+
+    Status insertMissingDoc(OperationContext* txn,
+                            const NamespaceString& nss,
+                            const BSONObj& doc) override;
+
+    Status dropUserDatabases(OperationContext* txn);
+
+    BeginCollectionFn beginCollectionFn;
+    InsertCollectionFn insertDocumentsFn;
+    InsertMissingDocFn insertMissingDocFn;
+    DropUserDatabases dropUserDatabasesFn;
+};
+
+}  // namespace repl
+}  // namespace mongo

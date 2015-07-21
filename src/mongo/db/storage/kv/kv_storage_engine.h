@@ -33,86 +33,92 @@
 #include <map>
 #include <string>
 
-#include <boost/scoped_ptr.hpp>
-#include <boost/thread/mutex.hpp>
-
 #include "mongo/db/storage/kv/kv_catalog.h"
 #include "mongo/db/storage/record_store.h"
 #include "mongo/db/storage/storage_engine.h"
+#include "mongo/stdx/mutex.h"
 
 namespace mongo {
 
-    class KVCatalog;
-    class KVEngine;
-    class KVDatabaseCatalogEntry;
+class KVCatalog;
+class KVEngine;
+class KVDatabaseCatalogEntry;
 
-    struct KVStorageEngineOptions {
-        KVStorageEngineOptions() :
-            directoryPerDB(false),
-            directoryForIndexes(false),
-            forRepair(false) {}
+struct KVStorageEngineOptions {
+    KVStorageEngineOptions()
+        : directoryPerDB(false), directoryForIndexes(false), forRepair(false) {}
 
-        bool directoryPerDB;
-        bool directoryForIndexes;
-        bool forRepair;
-    };
+    bool directoryPerDB;
+    bool directoryForIndexes;
+    bool forRepair;
+};
 
-    class KVStorageEngine : public StorageEngine {
-    public:
-        /**
-         * @param engine - owneership passes to me
-         */
-        KVStorageEngine( KVEngine* engine,
-                         const KVStorageEngineOptions& options = KVStorageEngineOptions() );
-        virtual ~KVStorageEngine();
+class KVStorageEngine final : public StorageEngine {
+public:
+    /**
+     * @param engine - ownership passes to me
+     */
+    KVStorageEngine(KVEngine* engine,
+                    const KVStorageEngineOptions& options = KVStorageEngineOptions());
+    virtual ~KVStorageEngine();
 
-        virtual void finishInit();
+    virtual void finishInit();
 
-        virtual RecoveryUnit* newRecoveryUnit();
+    virtual RecoveryUnit* newRecoveryUnit();
 
-        virtual void listDatabases( std::vector<std::string>* out ) const;
+    virtual void listDatabases(std::vector<std::string>* out) const;
 
-        virtual DatabaseCatalogEntry* getDatabaseCatalogEntry( OperationContext* opCtx,
-                                                               StringData db );
+    virtual DatabaseCatalogEntry* getDatabaseCatalogEntry(OperationContext* opCtx, StringData db);
 
-        virtual bool supportsDocLocking() const { return _supportsDocLocking; }
+    virtual bool supportsDocLocking() const {
+        return _supportsDocLocking;
+    }
 
-        virtual Status closeDatabase( OperationContext* txn, StringData db );
+    virtual Status closeDatabase(OperationContext* txn, StringData db);
 
-        virtual Status dropDatabase( OperationContext* txn, StringData db );
+    virtual Status dropDatabase(OperationContext* txn, StringData db);
 
-        virtual int flushAllFiles( bool sync );
+    virtual int flushAllFiles(bool sync);
 
-        virtual bool isDurable() const;
+    virtual bool isDurable() const;
 
-        virtual Status repairRecordStore(OperationContext* txn, const std::string& ns);
+    virtual Status repairRecordStore(OperationContext* txn, const std::string& ns);
 
-        virtual void cleanShutdown();
+    virtual void cleanShutdown();
 
-        // ------ kv ------
+    SnapshotManager* getSnapshotManager() const final;
 
-        KVEngine* getEngine() { return _engine.get(); }
-        const KVEngine* getEngine() const { return _engine.get(); }
+    // ------ kv ------
 
-        KVCatalog* getCatalog() { return _catalog.get(); }
-        const KVCatalog* getCatalog() const { return _catalog.get(); }
+    KVEngine* getEngine() {
+        return _engine.get();
+    }
+    const KVEngine* getEngine() const {
+        return _engine.get();
+    }
 
-    private:
-        class RemoveDBChange;
+    KVCatalog* getCatalog() {
+        return _catalog.get();
+    }
+    const KVCatalog* getCatalog() const {
+        return _catalog.get();
+    }
 
-        KVStorageEngineOptions _options;
+private:
+    class RemoveDBChange;
 
-        // This must be the first member so it is destroyed last.
-        boost::scoped_ptr<KVEngine> _engine;
+    KVStorageEngineOptions _options;
 
-        const bool _supportsDocLocking;
+    // This must be the first member so it is destroyed last.
+    std::unique_ptr<KVEngine> _engine;
 
-        boost::scoped_ptr<RecordStore> _catalogRecordStore;
-        boost::scoped_ptr<KVCatalog> _catalog;
+    const bool _supportsDocLocking;
 
-        typedef std::map<std::string,KVDatabaseCatalogEntry*> DBMap;
-        DBMap _dbs;
-        mutable boost::mutex _dbsLock;
-    };
+    std::unique_ptr<RecordStore> _catalogRecordStore;
+    std::unique_ptr<KVCatalog> _catalog;
 
+    typedef std::map<std::string, KVDatabaseCatalogEntry*> DBMap;
+    DBMap _dbs;
+    mutable stdx::mutex _dbsLock;
+};
 }

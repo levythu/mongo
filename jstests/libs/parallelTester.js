@@ -120,6 +120,10 @@ if ( typeof _threadInject != "undefined" ){
                                    "extent.js",
                                    "indexb.js",
 
+                                   // sets a failpoint that causes the server to ignore long keys,
+                                   // which makes index_bigkeys.js fail
+                                   "index_bigkeys_nofail.js",
+
                                    // tests turn on profiling
                                    "profile1.js",
                                    "profile3.js",
@@ -225,6 +229,7 @@ if ( typeof _threadInject != "undefined" ){
         var wrapper = function( fun, argv ) {
                    eval (
                          "var z = function() {" +
+                         "TestData = " + tojson(TestData) + ";" +
                          "var __parallelTests__fun = " + fun.toString() + ";" +
                          "var __parallelTests__argv = " + tojson( argv ) + ";" +
                          "var __parallelTests__passed = false;" +

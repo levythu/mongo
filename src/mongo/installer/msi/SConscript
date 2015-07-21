@@ -24,7 +24,7 @@ sourcesList = [ "BinaryFragment.wxs",
             ]
 
 # Need to do this in order to get scons to translate path separators into native format
-buildDir = Dir(env["BUILD_DIR"]).path
+buildDir = env.Dir("$BUILD_DIR").path
 if has_option("use-new-tools"):
 	toolBuildDir = "src\mongo-tools"
 else:
@@ -80,7 +80,7 @@ else:
 sources = ["wxs/" + file for file in sourcesList]
 objects = ["$BUILD_DIR/msi/" + file.replace(".wxs", ".wixobj") for file in sourcesList]
 
-full_version = env['MONGO_CODE_VERSION'].partition('-')[0]
+full_version = env['MONGO_VERSION'].partition('-')[0]
 
 # major version is the x.y, not the x.y.z
 major_version = full_version

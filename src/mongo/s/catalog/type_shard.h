@@ -36,113 +36,90 @@
 
 namespace mongo {
 
-    struct BSONArray;
-    class BSONObj;
-    class Status;
-    template<typename T> class StatusWith;
+struct BSONArray;
+class BSONObj;
+class Status;
+template <typename T>
+class StatusWith;
+
+/**
+ * This class represents the layout and contents of documents contained in the
+ * config.shards collection. All manipulation of documents coming from that
+ * collection should be done with this class.
+ */
+class ShardType {
+public:
+    // Name of the shards collection in the config server.
+    static const std::string ConfigNS;
+
+    // Field names and types in the shards collection type.
+    static const BSONField<std::string> name;
+    static const BSONField<std::string> host;
+    static const BSONField<bool> draining;
+    static const BSONField<long long> maxSizeMB;
+    static const BSONField<BSONArray> tags;
+
 
     /**
-     * This class represents the layout and contents of documents contained in the
-     * config.shards collection. All manipulation of documents coming from that
-     * collection should be done with this class.
-     *
-     * Usage Example:
-     *
-     *     // Contact the config. 'conn' has been obtained before.
-     *     DBClientBase* conn;
-     *     BSONObj query = QUERY(ShardType::exampleField("exampleFieldName"));
-     *     exampleDoc = conn->findOne(ShardType::ConfigNS, query);
-     *
-     *     // Process the response.
-     *     StatusWith<ShardType> exampleResult = ShardType::fromBSON(exampleDoc);
-     *     if (!exampleResult.isOK()) {
-     *         // handle error -- exampleResult.getStatus()
-     *     }
-     *     ShardType exampleType = exampleResult.getValue();
-     *     // use 'exampleType'
-     *
+     * Constructs a new ShardType object from BSON.
+     * Also does validation of the contents.
      */
-    class ShardType {
-    public:
+    static StatusWith<ShardType> fromBSON(const BSONObj& source);
 
-        // Name of the shards collection in the config server.
-        static const std::string ConfigNS;
+    /**
+     * Returns OK if all fields have been set. Otherwise returns NoSuchKey
+     * and information about the first field that is missing.
+     */
+    Status validate() const;
 
-        // Field names and types in the shards collection type.
-        static const BSONField<std::string> name;
-        static const BSONField<std::string> host;
-        static const BSONField<bool> draining;
-        static const BSONField<long long> maxSize;
-        static const BSONField<BSONArray> tags;
+    /**
+     * Returns the BSON representation of the entry.
+     */
+    BSONObj toBSON() const;
 
-        ShardType();
-        ~ShardType();
+    /**
+     * Returns a std::string representation of the current internal state.
+     */
+    std::string toString() const;
 
-        /**
-         * Constructs a new ShardType object from BSON.
-         * Also does validation of the contents.
-         */
-        static StatusWith<ShardType> fromBSON(const BSONObj& source);
+    const std::string& getName() const {
+        return _name.get();
+    }
+    void setName(const std::string& name);
 
-        /**
-         * Returns OK if all fields have been set. Otherwise returns NoSuchKey
-         * and information about the first field that is missing.
-         */
-        Status validate() const;
+    const std::string& getHost() const {
+        return _host.get();
+    }
+    void setHost(const std::string& host);
 
-        /**
-         * Returns the BSON representation of the entry.
-         */
-        BSONObj toBSON() const;
+    bool getDraining() const {
+        return _draining.value_or(false);
+    }
+    void setDraining(const bool draining);
 
-        /**
-         * Clears the internal state.
-         */
-        void clear();
+    long long getMaxSizeMB() const {
+        return _maxSizeMB.value_or(0);
+    }
+    void setMaxSizeMB(const long long maxSizeMB);
 
-        /**
-         * Copies all the fields present in 'this' to 'other'.
-         */
-        void cloneTo(ShardType* other) const;
+    const std::vector<std::string> getTags() const {
+        return _tags.value_or(std::vector<std::string>());
+    }
+    void setTags(const std::vector<std::string>& tags);
 
-        /**
-         * Returns a std::string representation of the current internal state.
-         */
-        std::string toString() const;
+private:
+    // Convention: (M)andatory, (O)ptional, (S)pecial rule.
 
-        bool isNameSet() const { return _name.is_initialized(); }
-        const std::string& getName() const { return _name.get(); }
-        void setName(const std::string& name);
+    // (M)  shard's id
+    boost::optional<std::string> _name;
+    // (M)  connection string for the host(s)
+    boost::optional<std::string> _host;
+    // (O) is it draining chunks?
+    boost::optional<bool> _draining;
+    // (O) maximum allowed disk space in MB
+    boost::optional<long long> _maxSizeMB;
+    // (O) shard tags
+    boost::optional<std::vector<std::string>> _tags;
+};
 
-        bool isHostSet() const { return _host.is_initialized(); }
-        const std::string& getHost() const { return _host.get(); }
-        void setHost(const std::string& host);
-
-        bool isDrainingSet() const { return _draining.is_initialized(); }
-        bool getDraining() const { return _draining.get(); }
-        void setDraining(const bool draining);
-
-        bool isMaxSizeSet() const { return _maxSize.is_initialized(); }
-        long long getMaxSize() const { return _maxSize.get(); }
-        void setMaxSize(const long long maxSize);
-
-        bool isTagsSet() const { return _tags.is_initialized(); }
-        const std::vector<std::string>& getTags() const { return _tags.get(); }
-        void setTags(const std::vector<std::string>& tags);
-
-    private:
-        // Convention: (M)andatory, (O)ptional, (S)pecial rule.
-
-        // (M)  shard's id
-        boost::optional<std::string> _name;
-        // (M)  connection string for the host(s)
-        boost::optional<std::string> _host;
-        // (O) is it draining drunks?
-        boost::optional<bool> _draining;
-        // (O) maximum allowed disk space in MB
-        boost::optional<long long> _maxSize;
-        // (O) shard tags
-        boost::optional<std::vector<std::string>> _tags;
-    };
-
-} // namespace mongo
+}  // namespace mongo

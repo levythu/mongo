@@ -28,195 +28,179 @@
 
 #pragma once
 
-#include <boost/shared_ptr.hpp>
+#include <set>
 
-#include "mongo/client/dbclient_rs.h"
+#include "mongo/db/jsobj.h"
 #include "mongo/s/client/shard.h"
-#include "mongo/s/shard_key_pattern.h"
 #include "mongo/util/concurrency/mutex.h"
 
 namespace mongo {
 
-    class ChunkManager;
-    class CollectionType;
-    class ConfigServer;
-    class DatabaseType;
-    class DBConfig;
+class ChunkManager;
+class CollectionType;
+class DatabaseType;
+class DBConfig;
+class OperationContext;
 
-    typedef boost::shared_ptr<DBConfig> DBConfigPtr;
+typedef std::shared_ptr<DBConfig> DBConfigPtr;
 
-    extern ConfigServer& configServer;
+struct CollectionInfo {
+    CollectionInfo() {
+        _dirty = false;
+        _dropped = false;
+    }
 
+    CollectionInfo(const CollectionType& in);
+    ~CollectionInfo();
 
-    struct CollectionInfo {
+    bool isSharded() const {
+        return _cm.get();
+    }
 
-        CollectionInfo() {
-            _dirty = false;
-            _dropped = false;
-        }
+    std::shared_ptr<ChunkManager> getCM() const {
+        return _cm;
+    }
 
-        CollectionInfo(const CollectionType& in);
-        ~CollectionInfo();
+    void resetCM(ChunkManager* cm);
 
-        bool isSharded() const {
-            return _cm.get();
-        }
+    void shard(ChunkManager* cm);
+    void unshard();
 
-        boost::shared_ptr<ChunkManager> getCM() const {
-            return _cm;
-        }
+    bool isDirty() const {
+        return _dirty;
+    }
+    bool wasDropped() const {
+        return _dropped;
+    }
 
-        void resetCM(ChunkManager * cm);
+    void save(const std::string& ns);
 
-        void shard(ChunkManager* cm);
-        void unshard();
+    void useChunkManager(std::shared_ptr<ChunkManager> manager);
 
-        bool isDirty() const { return _dirty; }
-        bool wasDropped() const { return _dropped; }
+    bool unique() const {
+        return _unique;
+    }
+    BSONObj key() const {
+        return _key;
+    }
 
-        void save(const std::string& ns);
+private:
+    BSONObj _key;
+    bool _unique;
+    std::shared_ptr<ChunkManager> _cm;
+    bool _dirty;
+    bool _dropped;
+};
 
-        void useChunkManager(boost::shared_ptr<ChunkManager> manager);
-
-        bool unique() const { return _unique; }
-        BSONObj key() const { return _key; }
-
-    private:
-        BSONObj _key;
-        bool _unique;
-        boost::shared_ptr<ChunkManager> _cm;
-        bool _dirty;
-        bool _dropped;
-    };
+/**
+ * top level configuration for a database
+ */
+class DBConfig {
+public:
+    DBConfig(std::string name, const DatabaseType& dbt);
 
     /**
-     * top level configuration for a database
+     * The name of the database which this entry caches.
      */
-    class DBConfig  {
-    public:
-        DBConfig(std::string name, const DatabaseType& dbt);
+    const std::string& name() const {
+        return _name;
+    }
 
-        /**
-         * The name of the database which this entry caches.
-         */
-        const std::string& name() const { return _name; }
+    /**
+     * Whether sharding is enabled for this database.
+     */
+    bool isShardingEnabled() const {
+        return _shardingEnabled;
+    }
 
-        /**
-         * Whether sharding is enabled for this database.
-         */
-        bool isShardingEnabled() const { return _shardingEnabled; }
+    const ShardId& getPrimaryId() const {
+        return _primaryId;
+    }
 
-        /**
-         * Reference to the primary shard for this database.
-         */
-        const Shard& getPrimary() const { return _primary; }
+    void enableSharding(bool save = true);
 
-        void enableSharding( bool save = true );
+    /**
+       @return true if there was sharding info to remove
+     */
+    bool removeSharding(const std::string& ns);
 
-        /**
-           @return true if there was sharding info to remove
-         */
-        bool removeSharding( const std::string& ns );
+    /**
+     * @return whether or not the 'ns' collection is partitioned
+     */
+    bool isSharded(const std::string& ns);
 
-        /**
-         * @return whether or not the 'ns' collection is partitioned
-         */
-        bool isSharded( const std::string& ns );
+    // Atomically returns *either* the chunk manager *or* the primary shard for the collection,
+    // neither if the collection doesn't exist.
+    void getChunkManagerOrPrimary(const std::string& ns,
+                                  std::shared_ptr<ChunkManager>& manager,
+                                  std::shared_ptr<Shard>& primary);
 
-        // Atomically returns *either* the chunk manager *or* the primary shard for the collection,
-        // neither if the collection doesn't exist.
-        void getChunkManagerOrPrimary(const std::string& ns,
-                                      boost::shared_ptr<ChunkManager>& manager,
-                                      boost::shared_ptr<Shard>& primary);
+    std::shared_ptr<ChunkManager> getChunkManager(const std::string& ns,
+                                                  bool reload = false,
+                                                  bool forceReload = false);
+    std::shared_ptr<ChunkManager> getChunkManagerIfExists(const std::string& ns,
+                                                          bool reload = false,
+                                                          bool forceReload = false);
 
-        boost::shared_ptr<ChunkManager> getChunkManager(const std::string& ns, bool reload = false, bool forceReload = false);
-        boost::shared_ptr<ChunkManager> getChunkManagerIfExists(const std::string& ns, bool reload = false, bool forceReload = false);
+    /**
+     * Returns shard id for primary shard for the database for which this DBConfig represents.
+     */
+    const ShardId& getShardId(const std::string& ns);
 
-        const Shard& getShard( const std::string& ns );
+    void setPrimary(const std::string& s);
 
-        void setPrimary( const std::string& s );
+    bool load();
+    bool reload();
 
-        bool load();
-        bool reload();
+    bool dropDatabase(OperationContext*, std::string& errmsg);
 
-        bool dropDatabase( std::string& errmsg );
+    void getAllShardIds(std::set<ShardId>* shardIds);
+    void getAllShardedCollections(std::set<std::string>& namespaces);
 
-        void getAllShards(std::set<Shard>& shards);
-        void getAllShardedCollections(std::set<std::string>& namespaces);
-
-    protected:
-        typedef std::map<std::string, CollectionInfo> CollectionInfoMap;
-
-
-        /**
-            lockless
-        */
-        bool _isSharded( const std::string& ns );
-
-        bool _dropShardedCollections( int& num, std::set<Shard>& allServers , std::string& errmsg );
-
-        bool _load();
-        bool _reload();
-        void _save( bool db = true, bool coll = true );
+protected:
+    typedef std::map<std::string, CollectionInfo> CollectionInfoMap;
 
 
-        // Name of the database which this entry caches
-        const std::string _name;
+    /**
+        lockless
+    */
+    bool _isSharded(const std::string& ns);
 
-        // Primary shard name
-        Shard _primary;
+    bool _dropShardedCollections(OperationContext* txn,
+                                 int& num,
+                                 std::set<ShardId>& shardIds,
+                                 std::string& errmsg);
 
-        // Whether sharding has been enabled for this database
-        bool _shardingEnabled;
-
-        // Set of collections and lock to protect access
-        mongo::mutex _lock;
-        CollectionInfoMap _collections;
-
-        // Ensures that only one thread at a time loads collection configuration data from
-        // the config server
-        mongo::mutex _hitConfigServerLock;
-    };
+    bool _load();
+    bool _reload();
+    void _save(bool db = true, bool coll = true);
 
 
-    class ConfigServer {
-    public:
-        ConfigServer() = default;
+    // Name of the database which this entry caches
+    const std::string _name;
 
-        bool ok( bool checkConsistency = false );
+    // Primary shard id
+    ShardId _primaryId;
 
-        const std::string& modelServer() const;
+    // Whether sharding has been enabled for this database
+    bool _shardingEnabled;
 
-        const Shard& getPrimary() const { return _primary; }
+    // Set of collections and lock to protect access
+    stdx::mutex _lock;
+    CollectionInfoMap _collections;
 
-        /**
-           call at startup, this will initiate connection to the grid db
-        */
-        bool init( const ConnectionString& configCS );
+    // Ensures that only one thread at a time loads collection configuration data from
+    // the config server
+    stdx::mutex _hitConfigServerLock;
+};
 
-        /**
-         * Check hosts are unique. Returns true if all configHosts
-         * hostname:port entries are unique. Otherwise return false
-         * and fill errmsg with message containing the offending server.
-         */
-        bool checkHostsAreUnique( const std::vector<std::string>& configHosts, std::string* errmsg );
 
-        int dbConfigVersion();
-        int dbConfigVersion( DBClientBase& conn );
+class ConfigServer {
+public:
+    static void reloadSettings();
 
-        void reloadSettings();
+    static void replicaSetChange(const std::string& setName,
+                                 const std::string& newConnectionString);
+};
 
-        ConnectionString getConnectionString() const;
-
-        void replicaSetChange(const std::string& setName, const std::string& newConnectionString);
-
-        static int VERSION;
-
-    private:
-        std::string getHost( const std::string& name , bool withPort );
-
-        std::vector<std::string> _config;
-        Shard _primary;
-    };
-
-} // namespace mongo
+}  // namespace mongo

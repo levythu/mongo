@@ -44,6 +44,7 @@ CAS
 CCCCCCCCCCCCCCCCCC
 CELL's
 CELLs
+CET
 CFLAGS
 CHECKKEY
 CKPT
@@ -53,6 +54,7 @@ CONFIG
 COVERITY
 CPUs
 CRC
+CSV
 CURSORs
 CURSTD
 CallsCustDate
@@ -217,6 +219,7 @@ PARAM
 POSIX
 PREDEFINE
 PRIu
+PRNG
 PTHREAD
 PTR
 Pandis
@@ -440,6 +443,7 @@ crc
 create's
 crypto
 cryptobad
+csv
 ctime
 ctype
 curbackup
@@ -603,6 +607,7 @@ icount
 idx
 ifdef's
 ikey
+impl
 incr
 incrementing
 indices
@@ -669,6 +674,7 @@ logtest
 lookup
 lookups
 lossy
+lrt
 lru
 lseek
 lsm
@@ -736,6 +742,7 @@ noraw
 notfound
 notsup
 nset
+nsnap
 nul
 nuls
 numSymbols
@@ -751,6 +758,7 @@ opendir
 openfile
 optimizations
 optype
+ori
 os
 ovfl
 ownp
@@ -837,6 +845,7 @@ sd
 secretkey
 sed
 sessionp
+setkv
 setstr
 setv
 sfence
@@ -849,6 +858,7 @@ skiplists
 slotsp
 slvg
 snaplen
+snapsort
 snprintf
 sp
 spinlock

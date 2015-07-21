@@ -28,96 +28,98 @@
 
 #pragma once
 
-#include "mongo/base/status_with.h"
 #include "mongo/base/string_data.h"
 #include "mongo/bson/oid.h"
 #include "mongo/stdx/chrono.h"
 
 namespace mongo {
 
-    using DistLockHandle = OID;
+using DistLockHandle = OID;
+class Status;
+template <typename T>
+class StatusWith;
+
+/**
+ * Interface for handling distributed locks.
+ *
+ * Usage:
+ *
+ * auto scopedDistLock = mgr->lock(...);
+ *
+ * if (!scopedDistLock.isOK()) {
+ *   // Did not get lock. scopedLockStatus destructor will not call unlock.
+ * }
+ *
+ * // To check if lock is still owned:
+ * auto status = scopedDistLock.getValue().checkStatus();
+ *
+ * if (!status.isOK()) {
+ *   // Someone took over the lock! Unlock will still be called at destructor, but will
+ *   // practically be a no-op since it doesn't own the lock anymore.
+ * }
+ */
+class DistLockManager {
+public:
+    static const stdx::chrono::milliseconds kDefaultSingleLockAttemptTimeout;
+    static const stdx::chrono::milliseconds kDefaultLockRetryInterval;
 
     /**
-     * Interface for handling distributed locks.
-     *
-     * Usage:
-     *
-     * auto scopedDistLock = mgr->lock(...);
-     *
-     * if (!scopedDistLock.isOK()) {
-     *   // Did not get lock. scopedLockStatus destructor will not call unlock.
-     * }
-     *
-     * // To check if lock is still owned:
-     * auto status = scopedDistLock.getValue().checkStatus();
-     *
-     * if (!status.isOK()) {
-     *   // Someone took over the lock! Unlock will still be called at destructor, but will
-     *   // practically be a no-op since it doesn't own the lock anymore.
-     * }
+     * RAII type for distributed lock. Not meant to be shared across multiple threads.
      */
-    class DistLockManager {
+    class ScopedDistLock {
+        MONGO_DISALLOW_COPYING(ScopedDistLock);
+
     public:
+        ScopedDistLock(DistLockHandle lockHandle, DistLockManager* lockManager);
+        ~ScopedDistLock();
+
+        ScopedDistLock(ScopedDistLock&& other);
+        ScopedDistLock& operator=(ScopedDistLock&& other);
 
         /**
-         * RAII type for distributed lock. Not meant to be shared across multiple threads.
+         * Checks whether the lock is still being held by querying the config server.
          */
-        class ScopedDistLock {
-            MONGO_DISALLOW_COPYING(ScopedDistLock);
-
-        public:
-            // TODO: remove default constructor after StatusWith supports types without one.
-            ScopedDistLock();
-            ScopedDistLock(DistLockHandle lockHandle, DistLockManager* lockManager);
-            ~ScopedDistLock();
-
-            ScopedDistLock(ScopedDistLock&& other);
-            ScopedDistLock& operator=(ScopedDistLock&& other);
-
-            /**
-             * Checks whether the lock is still being held by querying the config server.
-             */
-            Status checkStatus();
-
-        private:
-            DistLockHandle _lockID;
-            DistLockManager* _lockManager; // Not owned here.
-        };
-
-        virtual ~DistLockManager() = default;
-
-        virtual void startUp() = 0;
-        virtual void shutDown() = 0;
-
-        /**
-         * Tries multiple times to lock, using the specified lock try interval, until
-         * a certain amount of time has passed or when any error that is not LockBusy
-         * occurred.
-         *
-         * waitFor = 0 indicates there should only be one attempt to acquire the lock, and
-         * no waiting.
-         * waitFor = -1 indicates we should retry indefinitely.
-         *
-         * Returns OK if the lock was successfully acquired.
-         * Returns ErrorCodes::DistributedClockSkewed when a clock skew is detected.
-         * Returns ErrorCodes::LockBusy if the lock is being held.
-         */
-        virtual StatusWith<ScopedDistLock> lock(
-                StringData name,
-                StringData whyMessage,
-                stdx::chrono::milliseconds waitFor = stdx::chrono::milliseconds(0),
-                stdx::chrono::milliseconds lockTryInterval = stdx::chrono::milliseconds(1000)) = 0;
+        Status checkStatus();
 
     private:
-        /**
-         * Unlocks the given lockHandle. Will attempt to retry again later if the config
-         * server is not reachable.
-         */
-        virtual void unlock(const DistLockHandle& lockHandle) BOOST_NOEXCEPT = 0;
-
-        /**
-         * Checks if the lockHandle still exists in the config server.
-         */
-        virtual Status checkStatus(const DistLockHandle& lockHandle) = 0;
+        DistLockHandle _lockID;
+        DistLockManager* _lockManager;  // Not owned here.
     };
+
+    virtual ~DistLockManager() = default;
+
+    virtual void startUp() = 0;
+    virtual void shutDown() = 0;
+
+    /**
+     * Tries multiple times to lock, using the specified lock try interval, until
+     * a certain amount of time has passed or when any error that is not LockBusy
+     * occurred.
+     *
+     * waitFor = 0 indicates there should only be one attempt to acquire the lock, and
+     * no waiting.
+     * waitFor = -1 indicates we should retry indefinitely.
+     *
+     * Returns OK if the lock was successfully acquired.
+     * Returns ErrorCodes::DistributedClockSkewed when a clock skew is detected.
+     * Returns ErrorCodes::LockBusy if the lock is being held.
+     */
+    virtual StatusWith<ScopedDistLock> lock(
+        StringData name,
+        StringData whyMessage,
+        stdx::chrono::milliseconds waitFor = kDefaultSingleLockAttemptTimeout,
+        stdx::chrono::milliseconds lockTryInterval = kDefaultLockRetryInterval) = 0;
+
+protected:
+    /**
+     * Unlocks the given lockHandle. Will attempt to retry again later if the config
+     * server is not reachable.
+     */
+    virtual void unlock(const DistLockHandle& lockHandle) = 0;
+
+    /**
+     * Checks if the lockHandle still exists in the config server.
+     */
+    virtual Status checkStatus(const DistLockHandle& lockHandle) = 0;
+};
 }

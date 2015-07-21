@@ -39,6 +39,7 @@
 #include "mongo/db/storage/kv/kv_storage_engine.h"
 #include "mongo/db/storage/storage_engine_lock_file.h"
 #include "mongo/db/storage/storage_engine_metadata.h"
+#include "mongo/db/storage/wiredtiger/wiredtiger_customization_hooks.h"
 #include "mongo/db/storage/wiredtiger/wiredtiger_kv_engine.h"
 #include "mongo/db/storage/wiredtiger/wiredtiger_global_options.h"
 #include "mongo/db/storage/wiredtiger/wiredtiger_index.h"
@@ -51,80 +52,74 @@
 
 namespace mongo {
 
-    namespace {
-        class WiredTigerFactory : public StorageEngine::Factory {
-        public:
-            virtual ~WiredTigerFactory(){}
-            virtual StorageEngine* create(const StorageGlobalParams& params,
-                                          const StorageEngineLockFile& lockFile) const {
-                if (lockFile.createdByUncleanShutdown()) {
-                    warning() << "Recovering data from the last clean checkpoint.";
-                }
-                WiredTigerKVEngine* kv = new WiredTigerKVEngine( params.dbpath,
-                                                                 wiredTigerGlobalOptions.engineConfig,
-                                                                 params.dur,
-                                                                 params.repair );
-                kv->setRecordStoreExtraOptions( wiredTigerGlobalOptions.collectionConfig );
-                kv->setSortedDataInterfaceExtraOptions( wiredTigerGlobalOptions.indexConfig );
-                // Intentionally leaked.
-                new WiredTigerServerStatusSection(kv);
-                new WiredTigerEngineRuntimeConfigParameter(kv);
+namespace {
+class WiredTigerFactory : public StorageEngine::Factory {
+public:
+    virtual ~WiredTigerFactory() {}
+    virtual StorageEngine* create(const StorageGlobalParams& params,
+                                  const StorageEngineLockFile& lockFile) const {
+        if (lockFile.createdByUncleanShutdown()) {
+            warning() << "Recovering data from the last clean checkpoint.";
+        }
+        WiredTigerKVEngine* kv = new WiredTigerKVEngine(
+            params.dbpath, wiredTigerGlobalOptions.engineConfig, params.dur, params.repair);
+        kv->setRecordStoreExtraOptions(wiredTigerGlobalOptions.collectionConfig);
+        kv->setSortedDataInterfaceExtraOptions(wiredTigerGlobalOptions.indexConfig);
+        // Intentionally leaked.
+        new WiredTigerServerStatusSection(kv);
+        new WiredTigerEngineRuntimeConfigParameter(kv);
 
-                KVStorageEngineOptions options;
-                options.directoryPerDB = params.directoryperdb;
-                options.directoryForIndexes = wiredTigerGlobalOptions.directoryForIndexes;
-                options.forRepair = params.repair;
-                return new KVStorageEngine( kv, options );
-            }
+        KVStorageEngineOptions options;
+        options.directoryPerDB = params.directoryperdb;
+        options.directoryForIndexes = wiredTigerGlobalOptions.directoryForIndexes;
+        options.forRepair = params.repair;
+        return new KVStorageEngine(kv, options);
+    }
 
-            virtual StringData getCanonicalName() const {
-                return kWiredTigerEngineName;
-            }
+    virtual StringData getCanonicalName() const {
+        return kWiredTigerEngineName;
+    }
 
-            virtual Status validateCollectionStorageOptions(const BSONObj& options) const {
-                return WiredTigerRecordStore::parseOptionsField(options).getStatus();
-            }
+    virtual Status validateCollectionStorageOptions(const BSONObj& options) const {
+        return WiredTigerRecordStore::parseOptionsField(options).getStatus();
+    }
 
-            virtual Status validateIndexStorageOptions(const BSONObj& options) const {
-                return WiredTigerIndex::parseIndexOptions(options).getStatus();
-            }
+    virtual Status validateIndexStorageOptions(const BSONObj& options) const {
+        return WiredTigerIndex::parseIndexOptions(options).getStatus();
+    }
 
-            virtual Status validateMetadata(const StorageEngineMetadata& metadata,
-                                            const StorageGlobalParams& params) const {
-                Status status = metadata.validateStorageEngineOption(
-                    "directoryPerDB", params.directoryperdb);
-                if (!status.isOK()) {
-                    return status;
-                }
+    virtual Status validateMetadata(const StorageEngineMetadata& metadata,
+                                    const StorageGlobalParams& params) const {
+        Status status =
+            metadata.validateStorageEngineOption("directoryPerDB", params.directoryperdb);
+        if (!status.isOK()) {
+            return status;
+        }
 
-                status = metadata.validateStorageEngineOption(
-                    "directoryForIndexes", wiredTigerGlobalOptions.directoryForIndexes);
-                if (!status.isOK()) {
-                    return status;
-                }
-
-                return Status::OK();
-            }
-
-            virtual BSONObj createMetadataOptions(const StorageGlobalParams& params) const {
-                BSONObjBuilder builder;
-                builder.appendBool("directoryPerDB", params.directoryperdb);
-                builder.appendBool("directoryForIndexes",
-                                   wiredTigerGlobalOptions.directoryForIndexes);
-                return builder.obj();
-            }
-
-        };
-    } // namespace
-
-    MONGO_INITIALIZER_WITH_PREREQUISITES(WiredTigerEngineInit,
-                                         ("SetGlobalEnvironment"))
-        (InitializerContext* context ) {
-
-        getGlobalServiceContext()->registerStorageEngine(kWiredTigerEngineName,
-                                                      new WiredTigerFactory());
+        status = metadata.validateStorageEngineOption("directoryForIndexes",
+                                                      wiredTigerGlobalOptions.directoryForIndexes);
+        if (!status.isOK()) {
+            return status;
+        }
 
         return Status::OK();
     }
 
+    virtual BSONObj createMetadataOptions(const StorageGlobalParams& params) const {
+        BSONObjBuilder builder;
+        builder.appendBool("directoryPerDB", params.directoryperdb);
+        builder.appendBool("directoryForIndexes", wiredTigerGlobalOptions.directoryForIndexes);
+        WiredTigerCustomizationHooks::get(getGlobalServiceContext())->appendUID(&builder);
+        return builder.obj();
+    }
+};
+}  // namespace
+
+MONGO_INITIALIZER_WITH_PREREQUISITES(WiredTigerEngineInit, ("SetGlobalEnvironment"))
+(InitializerContext* context) {
+    getGlobalServiceContext()->registerStorageEngine(kWiredTigerEngineName,
+                                                     new WiredTigerFactory());
+
+    return Status::OK();
+}
 }

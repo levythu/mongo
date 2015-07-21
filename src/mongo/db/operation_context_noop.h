@@ -27,7 +27,6 @@
  */
 #pragma once
 
-#include <boost/scoped_ptr.hpp>
 
 #include "mongo/db/operation_context.h"
 #include "mongo/db/client.h"
@@ -37,85 +36,78 @@
 
 namespace mongo {
 
-    class OperationContextNoop : public OperationContext {
-    public:
-        OperationContextNoop(RecoveryUnit* ru)
-            : _recoveryUnit(ru),
-              _locker(new LockerNoop()) {
+class OperationContextNoop : public OperationContext {
+public:
+    OperationContextNoop() : OperationContextNoop(new RecoveryUnitNoop()) {}
 
-        }
+    OperationContextNoop(RecoveryUnit* ru) : OperationContextNoop(nullptr, 0, ru) {}
 
-        OperationContextNoop()
-            : _recoveryUnit(new RecoveryUnitNoop()),
-              _locker(new LockerNoop()) {
+    OperationContextNoop(Client* client, unsigned int opId)
+        : OperationContextNoop(client, opId, new RecoveryUnitNoop()) {}
 
-        }
+    OperationContextNoop(Client* client, unsigned int opId, RecoveryUnit* ru)
+        : OperationContextNoop(client, opId, new LockerNoop(), ru) {}
 
-        virtual ~OperationContextNoop() { }
+    OperationContextNoop(Client* client, unsigned int opId, Locker* locker)
+        : OperationContextNoop(client, opId, locker, new RecoveryUnitNoop()) {}
 
-        virtual Client* getClient() const override {
-            invariant(false);
-            return NULL;
-        }
+    OperationContextNoop(Client* client, unsigned int opId, Locker* locker, RecoveryUnit* ru)
+        : OperationContext(client, opId, locker), _recoveryUnit(ru) {
+        _locker.reset(lockState());
+    }
 
-        virtual RecoveryUnit* recoveryUnit() const override {
-            return _recoveryUnit.get();
-        }
+    virtual ~OperationContextNoop() = default;
 
-        virtual RecoveryUnit* releaseRecoveryUnit() override {
-            return _recoveryUnit.release();
-        }
+    virtual RecoveryUnit* recoveryUnit() const override {
+        return _recoveryUnit.get();
+    }
 
-        virtual RecoveryUnitState setRecoveryUnit(RecoveryUnit* unit,
-                                                  RecoveryUnitState state) override {
-            RecoveryUnitState oldState = _ruState;
-            _recoveryUnit.reset(unit);
-            _ruState = state;
-            return oldState;
-        }
+    virtual RecoveryUnit* releaseRecoveryUnit() override {
+        return _recoveryUnit.release();
+    }
 
-        virtual Locker* lockState() const override {
-            return _locker.get();
-        }
+    virtual RecoveryUnitState setRecoveryUnit(RecoveryUnit* unit,
+                                              RecoveryUnitState state) override {
+        RecoveryUnitState oldState = _ruState;
+        _recoveryUnit.reset(unit);
+        _ruState = state;
+        return oldState;
+    }
 
-        virtual ProgressMeter* setMessage(const char * msg,
-                                          const std::string &name,
-                                          unsigned long long progressMeterTotal,
-                                          int secondsBetween) override {
-            return &_pm;
-        }
+    virtual ProgressMeter* setMessage_inlock(const char* msg,
+                                             const std::string& name,
+                                             unsigned long long progressMeterTotal,
+                                             int secondsBetween) override {
+        return &_pm;
+    }
 
-        virtual void checkForInterrupt() const override { }
-        virtual Status checkForInterruptNoAssert() const override {
-            return Status::OK();
-        }
+    virtual void checkForInterrupt() override {}
+    virtual Status checkForInterruptNoAssert() override {
+        return Status::OK();
+    }
 
-        virtual bool isPrimaryFor( StringData ns ) override {
-            return true;
-        }
+    virtual bool isPrimaryFor(StringData ns) override {
+        return true;
+    }
 
-        virtual std::string getNS() const override {
-            return std::string();
-        };
-
-        virtual unsigned int getOpID() const override {
-            return 0;
-        }
-
-        void setReplicatedWrites(bool writesAreReplicated = true) override {}
-
-        bool writesAreReplicated() const override {
-            return false;
-        }
-
-        virtual uint64_t getRemainingMaxTimeMicros() const override {
-            return 0;
-        }
-
-    private:
-        std::auto_ptr<RecoveryUnit> _recoveryUnit;
-        boost::scoped_ptr<Locker> _locker;
-        ProgressMeter _pm;
+    virtual std::string getNS() const override {
+        return std::string();
     };
+
+    void setReplicatedWrites(bool writesAreReplicated = true) override {}
+
+    bool writesAreReplicated() const override {
+        return false;
+    }
+
+    virtual uint64_t getRemainingMaxTimeMicros() const override {
+        return 0;
+    }
+
+private:
+    std::unique_ptr<RecoveryUnit> _recoveryUnit;
+    std::unique_ptr<Locker> _locker;
+    ProgressMeter _pm;
+};
 
 }  // namespace mongo

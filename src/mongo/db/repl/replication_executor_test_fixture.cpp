@@ -30,45 +30,32 @@
 
 #include "mongo/db/repl/replication_executor_test_fixture.h"
 
-#include "mongo/db/repl/network_interface_mock.h"
 #include "mongo/db/repl/replication_executor.h"
+#include "mongo/db/repl/storage_interface_mock.h"
+#include "mongo/executor/network_interface_mock.h"
 
 namespace mongo {
 namespace repl {
 
 namespace {
 
-    const int64_t prngSeed = 1;
+const int64_t prngSeed = 1;
 
-} // namespace
+}  // namespace
 
-    void ReplicationExecutorTest::launchExecutorThread() {
-        ASSERT(!_executorThread);
-        _executorThread.reset(
-                new boost::thread(stdx::bind(&ReplicationExecutor::run, _executor.get())));
-        _net->enterNetwork();
-    }
+ReplicationExecutor& ReplicationExecutorTest::getReplExecutor() {
+    return dynamic_cast<ReplicationExecutor&>(getExecutor());
+}
 
-    void ReplicationExecutorTest::joinExecutorThread() {
-        ASSERT(_executorThread);
-        _net->exitNetwork();
-        _executorThread->join();
-        _executorThread.reset();
-    }
+void ReplicationExecutorTest::postExecutorThreadLaunch() {
+    getNet()->enterNetwork();
+}
 
-    void ReplicationExecutorTest::setUp() {
-        _net = new NetworkInterfaceMock;
-        _executor.reset(new ReplicationExecutor(_net, prngSeed));
-    }
-
-    void ReplicationExecutorTest::tearDown() {
-        if (_executorThread) {
-            _executor->shutdown();
-            joinExecutorThread();
-        }
-        _executor.reset();
-        _net = nullptr;
-    }
+std::unique_ptr<executor::TaskExecutor> ReplicationExecutorTest::makeTaskExecutor(
+    std::unique_ptr<executor::NetworkInterface> net) {
+    _storage = new StorageInterfaceMock();
+    return stdx::make_unique<ReplicationExecutor>(net.release(), _storage, prngSeed);
+}
 
 }  // namespace repl
 }  // namespace mongo

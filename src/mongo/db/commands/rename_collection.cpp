@@ -52,122 +52,99 @@
 
 namespace mongo {
 
-    using std::min;
-    using std::string;
-    using std::stringstream;
+using std::min;
+using std::string;
+using std::stringstream;
 
-    class CmdRenameCollection : public Command {
-    public:
-        CmdRenameCollection() : Command( "renameCollection" ) {}
-        virtual bool adminOnly() const {
-            return true;
+class CmdRenameCollection : public Command {
+public:
+    CmdRenameCollection() : Command("renameCollection") {}
+    virtual bool adminOnly() const {
+        return true;
+    }
+    virtual bool slaveOk() const {
+        return false;
+    }
+    virtual bool isWriteCommandForConfigServer() const {
+        return true;
+    }
+    virtual Status checkAuthForCommand(ClientBasic* client,
+                                       const std::string& dbname,
+                                       const BSONObj& cmdObj) {
+        return rename_collection::checkAuthForRenameCollectionCommand(client, dbname, cmdObj);
+    }
+    virtual void help(stringstream& help) const {
+        help << " example: { renameCollection: foo.a, to: bar.b }";
+    }
+
+    static void dropCollection(OperationContext* txn, Database* db, StringData collName) {
+        WriteUnitOfWork wunit(txn);
+        if (db->dropCollection(txn, collName).isOK()) {
+            // ignoring failure case
+            wunit.commit();
         }
-        virtual bool slaveOk() const {
+    }
+
+    virtual bool run(OperationContext* txn,
+                     const string& dbname,
+                     BSONObj& cmdObj,
+                     int,
+                     string& errmsg,
+                     BSONObjBuilder& result) {
+        string source = cmdObj.getStringField(name.c_str());
+        string target = cmdObj.getStringField("to");
+
+        if (!NamespaceString::validCollectionComponent(target.c_str())) {
+            errmsg = "invalid collection name: " + target;
             return false;
         }
-        virtual bool isWriteCommandForConfigServer() const { return true; }
-        virtual Status checkAuthForCommand(ClientBasic* client,
-                                           const std::string& dbname,
-                                           const BSONObj& cmdObj) {
-            return rename_collection::checkAuthForRenameCollectionCommand(client, dbname, cmdObj);
-        }
-        virtual void help( stringstream &help ) const {
-            help << " example: { renameCollection: foo.a, to: bar.b }";
+        if (source.empty() || target.empty()) {
+            errmsg = "invalid command syntax";
+            return false;
         }
 
-        std::vector<BSONObj> stopIndexBuilds(OperationContext* opCtx,
-                                             Database* db,
-                                             const NamespaceString& source,
-                                             const NamespaceString& target) {
-
-            IndexCatalog::IndexKillCriteria criteria;
-            criteria.ns = source;
-            std::vector<BSONObj> prelim = 
-                IndexBuilder::killMatchingIndexBuilds(db->getCollection(source), criteria);
-
-            std::vector<BSONObj> indexes;
-
-            for (int i = 0; i < static_cast<int>(prelim.size()); i++) {
-                // Change the ns
-                BSONObj stripped = prelim[i].removeField("ns");
-                BSONObjBuilder builder;
-                builder.appendElements(stripped);
-                builder.append("ns", target);
-                indexes.push_back(builder.obj());
+        if ((repl::getGlobalReplicationCoordinator()->getReplicationMode() !=
+             repl::ReplicationCoordinator::modeNone)) {
+            if (NamespaceString(source).isOplog()) {
+                errmsg = "can't rename live oplog while replicating";
+                return false;
             }
-
-            return indexes;
-        }
-
-        static void dropCollection(OperationContext* txn, Database* db, StringData collName) {
-            WriteUnitOfWork wunit(txn);
-            if (db->dropCollection(txn, collName).isOK()) {
-                // ignoring failure case
-                wunit.commit();
+            if (NamespaceString(target).isOplog()) {
+                errmsg = "can't rename to live oplog while replicating";
+                return false;
             }
         }
 
-        virtual bool run(OperationContext* txn,
-                         const string& dbname,
-                         BSONObj& cmdObj,
-                         int,
-                         string& errmsg,
-                         BSONObjBuilder& result) {
-            string source = cmdObj.getStringField( name.c_str() );
-            string target = cmdObj.getStringField( "to" );
-
-            if ( !NamespaceString::validCollectionComponent(target.c_str()) ) {
-                errmsg = "invalid collection name: " + target;
-                return false;
-            }
-            if ( source.empty() || target.empty() ) {
-                errmsg = "invalid command syntax";
-                return false;
-            }
-
-            if ((repl::getGlobalReplicationCoordinator()->getReplicationMode() != 
-                 repl::ReplicationCoordinator::modeNone)) {
-                if (NamespaceString(source).isOplog()) {
-                    errmsg = "can't rename live oplog while replicating";
-                    return false;
-                }
-                if (NamespaceString(target).isOplog()) {
-                    errmsg = "can't rename to live oplog while replicating";
-                    return false;
-                }
-            }
-
-            if (NamespaceString::oplog(source) != NamespaceString::oplog(target)) {
-                errmsg =
-                    "If either the source or target of a rename is an oplog name, both must be";
-                return false;
-            }
-
-            Status sourceStatus = userAllowedWriteNS(source);
-            if (!sourceStatus.isOK()) {
-                errmsg = "error with source namespace: " + sourceStatus.reason();
-                return false;
-            }
-
-            Status targetStatus = userAllowedWriteNS(target);
-            if (!targetStatus.isOK()) {
-                errmsg = "error with target namespace: " + targetStatus.reason();
-                return false;
-            }
-
-            if (NamespaceString(source).coll() == "system.indexes"
-                || NamespaceString(target).coll() == "system.indexes") {
-                errmsg = "renaming system.indexes is not allowed";
-                return false;
-            }
-
-            return appendCommandStatus(result,
-                                       renameCollection(txn,
-                                                        NamespaceString(source),
-                                                        NamespaceString(target),
-                                                        cmdObj["dropTarget"].trueValue(),
-                                                        cmdObj["stayTemp"].trueValue()));
+        if (NamespaceString::oplog(source) != NamespaceString::oplog(target)) {
+            errmsg = "If either the source or target of a rename is an oplog name, both must be";
+            return false;
         }
-    } cmdrenamecollection;
 
-} // namespace mongo
+        Status sourceStatus = userAllowedWriteNS(source);
+        if (!sourceStatus.isOK()) {
+            errmsg = "error with source namespace: " + sourceStatus.reason();
+            return false;
+        }
+
+        Status targetStatus = userAllowedWriteNS(target);
+        if (!targetStatus.isOK()) {
+            errmsg = "error with target namespace: " + targetStatus.reason();
+            return false;
+        }
+
+        if (NamespaceString(source).coll() == "system.indexes" ||
+            NamespaceString(target).coll() == "system.indexes") {
+            errmsg = "renaming system.indexes is not allowed";
+            return false;
+        }
+
+        return appendCommandStatus(result,
+                                   renameCollection(txn,
+                                                    NamespaceString(source),
+                                                    NamespaceString(target),
+                                                    cmdObj["dropTarget"].trueValue(),
+                                                    cmdObj["stayTemp"].trueValue()));
+    }
+} cmdrenamecollection;
+
+}  // namespace mongo

@@ -30,25 +30,56 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "mongo/db/operation_context_noop.h"
+#include "mongo/db/service_context_noop.h"
+#include "mongo/stdx/memory.h"
 
 namespace mongo {
 
-    class RecordStore;
-    class RecoveryUnit;
+class RecordStore;
+class RecoveryUnit;
 
-    class HarnessHelper {
-    public:
-        HarnessHelper(){}
-        virtual ~HarnessHelper(){}
+class HarnessHelper {
+public:
+    HarnessHelper() : _serviceContext(), _client(_serviceContext.makeClient("hh")) {}
+    virtual ~HarnessHelper() {}
 
-        virtual RecordStore* newNonCappedRecordStore() = 0;
-        virtual RecoveryUnit* newRecoveryUnit() = 0;
+    virtual std::unique_ptr<RecordStore> newNonCappedRecordStore() = 0;
 
-        virtual OperationContext* newOperationContext() {
-            return new OperationContextNoop( newRecoveryUnit() );
-        }
-    };
+    static const int64_t kDefaultCapedSizeBytes = 16 * 1024 * 1024;
+    virtual std::unique_ptr<RecordStore> newCappedRecordStore(
+        int64_t cappedSizeBytes = kDefaultCapedSizeBytes, int64_t cappedMaxDocs = -1) = 0;
 
-    HarnessHelper* newHarnessHelper();
+    virtual std::unique_ptr<OperationContext> newOperationContext(Client* client) {
+        return stdx::make_unique<OperationContextNoop>(client, 1, newRecoveryUnit());
+    }
+
+    std::unique_ptr<OperationContext> newOperationContext() {
+        return newOperationContext(client());
+    }
+
+    /**
+     * Currently this requires that it is possible to have two independent open write operations
+     * at the same time one the same thread (with separate Clients, OperationContexts, and
+     * RecoveryUnits).
+     */
+    virtual bool supportsDocLocking() = 0;
+
+    Client* client() {
+        return _client.get();
+    }
+    ServiceContext* serviceContext() {
+        return &_serviceContext;
+    }
+
+private:
+    virtual RecoveryUnit* newRecoveryUnit() = 0;
+
+    ServiceContextNoop _serviceContext;
+    ServiceContext::UniqueClient _client;
+};
+
+std::unique_ptr<HarnessHelper> newHarnessHelper();
 }

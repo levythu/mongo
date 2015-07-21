@@ -203,7 +203,6 @@ struct __wt_connection_stats {
 	WT_STATS dh_session_handles;
 	WT_STATS dh_session_sweeps;
 	WT_STATS file_open;
-	WT_STATS log_buffer_grow;
 	WT_STATS log_buffer_size;
 	WT_STATS log_bytes_payload;
 	WT_STATS log_bytes_written;
@@ -273,6 +272,7 @@ struct __wt_connection_stats {
 	WT_STATS txn_pinned_checkpoint_range;
 	WT_STATS txn_pinned_range;
 	WT_STATS txn_rollback;
+	WT_STATS txn_sync;
 	WT_STATS write_io;
 };
 

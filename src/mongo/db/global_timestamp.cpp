@@ -28,55 +28,52 @@
 
 #define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kDefault
 
-#include <boost/thread.hpp>
-
 #include "mongo/db/global_timestamp.h"
-#include "mongo/util/concurrency/mutex.h"
+#include "mongo/stdx/mutex.h"
+#include "mongo/stdx/thread.h"
 #include "mongo/util/log.h"
 
 namespace {
-    mongo::mutex globalTimestampMutex;
-    mongo::Timestamp globalTimestamp(0, 0);
+mongo::stdx::mutex globalTimestampMutex;
+mongo::Timestamp globalTimestamp(0, 0);
 
-    bool skewed(const mongo::Timestamp& val) {
-        if (val.getInc() & 0x80000000) {
-            mongo::warning() << "clock skew detected  prev: " << val.getSecs()
-                             << " now: " << (unsigned) time(0) << std::endl;
-            return true;
-        }
-
-        return false;
+bool skewed(const mongo::Timestamp& val) {
+    if (val.getInc() & 0x80000000) {
+        mongo::warning() << "clock skew detected  prev: " << val.getSecs()
+                         << " now: " << (unsigned)time(0) << std::endl;
+        return true;
     }
+
+    return false;
+}
 }
 
 namespace mongo {
-    void setGlobalTimestamp(const Timestamp& newTime) {
-        boost::lock_guard<boost::mutex> lk(globalTimestampMutex);
-        globalTimestamp = newTime;
+void setGlobalTimestamp(const Timestamp& newTime) {
+    stdx::lock_guard<stdx::mutex> lk(globalTimestampMutex);
+    globalTimestamp = newTime;
+}
+
+Timestamp getLastSetTimestamp() {
+    stdx::lock_guard<stdx::mutex> lk(globalTimestampMutex);
+    return globalTimestamp;
+}
+
+Timestamp getNextGlobalTimestamp() {
+    stdx::lock_guard<stdx::mutex> lk(globalTimestampMutex);
+
+    const unsigned now = (unsigned)time(0);
+    const unsigned globalSecs = globalTimestamp.getSecs();
+    if (globalSecs == now) {
+        globalTimestamp = Timestamp(globalSecs, globalTimestamp.getInc() + 1);
+    } else if (now < globalSecs) {
+        globalTimestamp = Timestamp(globalSecs, globalTimestamp.getInc() + 1);
+        // separate function to keep out of the hot code path
+        fassert(17449, !skewed(globalTimestamp));
+    } else {
+        globalTimestamp = Timestamp(now, 1);
     }
 
-    Timestamp getLastSetTimestamp() {
-        boost::lock_guard<boost::mutex> lk(globalTimestampMutex);
-        return globalTimestamp;
-    }
-
-    Timestamp getNextGlobalTimestamp() {
-        boost::lock_guard<boost::mutex> lk(globalTimestampMutex);
-
-        const unsigned now = (unsigned) time(0);
-        const unsigned globalSecs = globalTimestamp.getSecs();
-        if ( globalSecs == now ) {
-            globalTimestamp = Timestamp(globalSecs, globalTimestamp.getInc() + 1);
-        }
-        else if ( now < globalSecs ) {
-            globalTimestamp = Timestamp(globalSecs, globalTimestamp.getInc() + 1);
-            // separate function to keep out of the hot code path
-            fassert(17449, !skewed(globalTimestamp));
-        }
-        else {
-            globalTimestamp = Timestamp(now, 1);
-        }
-
-        return globalTimestamp;
-    }
+    return globalTimestamp;
+}
 }

@@ -32,79 +32,77 @@
 #include "mongo/client/connection_string.h"
 
 #include <list>
+#include <memory>
 
-#include "mongo/client/dbclientinterface.h"
 #include "mongo/client/dbclient_rs.h"
+#include "mongo/client/dbclientinterface.h"
 #include "mongo/client/syncclusterconnection.h"
+#include "mongo/stdx/memory.h"
 #include "mongo/util/assert_util.h"
 #include "mongo/util/log.h"
 
 namespace mongo {
 
-    boost::mutex ConnectionString::_connectHookMutex;
-    ConnectionString::ConnectionHook* ConnectionString::_connectHook = NULL;
+stdx::mutex ConnectionString::_connectHookMutex;
+ConnectionString::ConnectionHook* ConnectionString::_connectHook = NULL;
 
-    DBClientBase* ConnectionString::connect( std::string& errmsg, double socketTimeout ) const {
-
-        switch ( _type ) {
+DBClientBase* ConnectionString::connect(std::string& errmsg, double socketTimeout) const {
+    switch (_type) {
         case MASTER: {
-            DBClientConnection * c = new DBClientConnection(true);
-            c->setSoTimeout( socketTimeout );
+            auto c = stdx::make_unique<DBClientConnection>(true);
+            c->setSoTimeout(socketTimeout);
             LOG(1) << "creating new connection to:" << _servers[0];
-            if ( ! c->connect( _servers[0] , errmsg ) ) {
-                delete c;
+            if (!c->connect(_servers[0], errmsg)) {
                 return 0;
             }
             LOG(1) << "connected connection!";
-            return c;
+            return c.release();
         }
 
         case SET: {
-            DBClientReplicaSet * set = new DBClientReplicaSet( _setName , _servers , socketTimeout );
-            if( ! set->connect() ) {
-                delete set;
+            auto set = stdx::make_unique<DBClientReplicaSet>(_setName, _servers, socketTimeout);
+            if (!set->connect()) {
                 errmsg = "connect failed to replica set ";
                 errmsg += toString();
                 return 0;
             }
-            return set;
+            return set.release();
         }
 
         case SYNC: {
             // TODO , don't copy
             std::list<HostAndPort> l;
-            for ( unsigned i=0; i<_servers.size(); i++ )
-                l.push_back( _servers[i] );
-            SyncClusterConnection* c = new SyncClusterConnection( l, socketTimeout );
+            for (unsigned i = 0; i < _servers.size(); i++)
+                l.push_back(_servers[i]);
+            SyncClusterConnection* c = new SyncClusterConnection(l, socketTimeout);
             return c;
         }
 
         case CUSTOM: {
-
             // Lock in case other things are modifying this at the same time
-            boost::lock_guard<boost::mutex> lk( _connectHookMutex );
+            stdx::lock_guard<stdx::mutex> lk(_connectHookMutex);
 
             // Allow the replacement of connections with other connections - useful for testing.
 
-            uassert( 16335, "custom connection to " + this->toString() +
-                        " specified with no connection hook", _connectHook );
+            uassert(16335,
+                    "custom connection to " + this->toString() +
+                        " specified with no connection hook",
+                    _connectHook);
 
             // Double-checked lock, since this will never be active during normal operation
-            DBClientBase* replacementConn = _connectHook->connect( *this, errmsg, socketTimeout );
+            DBClientBase* replacementConn = _connectHook->connect(*this, errmsg, socketTimeout);
 
             log() << "replacing connection to " << this->toString() << " with "
-                  << ( replacementConn ? replacementConn->getServerAddress() : "(empty)" );
+                  << (replacementConn ? replacementConn->getServerAddress() : "(empty)");
 
             return replacementConn;
         }
 
         case INVALID:
-            throw UserException( 13421 , "trying to connect to invalid ConnectionString" );
-            break;
-        }
-
-        verify( 0 );
-        return 0;
+            uasserted(13421, "trying to connect to invalid ConnectionString");
     }
 
-} // namepspace mongo
+    MONGO_UNREACHABLE;
+}
+
+}  // namepspace mongo

@@ -36,7 +36,10 @@
 
 #include "mongo/db/audit.h"
 #include "mongo/db/auth/authorization_manager_global.h"
+#include "mongo/db/auth/authorization_session.h"
 #include "mongo/db/auth/internal_user_auth.h"
+#include "mongo/db/client.h"
+#include "mongo/rpc/metadata/audit_metadata.h"
 #include "mongo/s/client/scc_fast_query_handler.h"
 #include "mongo/s/cluster_last_error_info.h"
 #include "mongo/s/version_manager.h"
@@ -44,94 +47,63 @@
 
 namespace mongo {
 
-    using std::string;
+using std::string;
 
-namespace {
+ShardingConnectionHook::ShardingConnectionHook(bool shardedConnections)
+    : _shardedConnections(shardedConnections) {}
 
-    bool initWireVersion(DBClientBase* conn, std::string* errMsg) {
-        BSONObj response;
-        if (!conn->runCommand("admin", BSON("isMaster" << 1), response)) {
-            *errMsg = str::stream() << "Failed to determine wire version "
-                                    << "for internal connection: " << response;
-            return false;
-        }
+void ShardingConnectionHook::onCreate(DBClientBase* conn) {
+    // Authenticate as the first thing we do
+    // NOTE: Replica set authentication allows authentication against *any* online host
+    if (getGlobalAuthorizationManager()->isAuthEnabled()) {
+        LOG(2) << "calling onCreate auth for " << conn->toString();
 
-        if (response.hasField("minWireVersion") && response.hasField("maxWireVersion")) {
-            int minWireVersion = response["minWireVersion"].numberInt();
-            int maxWireVersion = response["maxWireVersion"].numberInt();
-            conn->setWireVersions(minWireVersion, maxWireVersion);
-        }
+        bool result = authenticateInternalUser(conn);
 
-        return true;
-    }
-
-} // namespace
-
-
-    ShardingConnectionHook::ShardingConnectionHook(bool shardedConnections)
-        : _shardedConnections(shardedConnections) {
-
-    }
-
-    void ShardingConnectionHook::onCreate(DBClientBase * conn) {
-
-        // Authenticate as the first thing we do
-        // NOTE: Replica set authentication allows authentication against *any* online host
-        if (getGlobalAuthorizationManager()->isAuthEnabled()) {
-            LOG(2) << "calling onCreate auth for " << conn->toString();
-
-            bool result = authenticateInternalUser(conn);
-
-            uassert(15847, str::stream() << "can't authenticate to server "
-                << conn->getServerAddress(),
+        uassert(15847,
+                str::stream() << "can't authenticate to server " << conn->getServerAddress(),
                 result);
-        }
-
-        // Initialize the wire version of single connections
-        if (conn->type() == ConnectionString::MASTER) {
-
-            LOG(2) << "checking wire version of new connection " << conn->toString();
-
-            // Initialize the wire protocol version of the connection to find out if we
-            // can send write commands to this connection.
-            string errMsg;
-            if (!initWireVersion(conn, &errMsg)) {
-                uasserted(17363, errMsg);
-            }
-        }
-
-        if (_shardedConnections) {
-            // For every DBClient created by mongos, add a hook that will capture the response from
-            // commands we pass along from the client, so that we can target the correct node when
-            // subsequent getLastError calls are made by mongos.
-            conn->setPostRunCommandHook(stdx::bind(&saveGLEStats, stdx::placeholders::_1, stdx::placeholders::_2));
-        }
-
-        // For every DBClient created by mongos, add a hook that will append impersonated users
-        // to the end of every runCommand.  mongod uses this information to produce auditing
-        // records attributed to the proper authenticated user(s).
-        conn->setRunCommandHook(stdx::bind(&audit::appendImpersonatedUsers, stdx::placeholders::_1));
-
-        // For every SCC created, add a hook that will allow fastest-config-first config reads if
-        // the appropriate server options are set.
-        if (conn->type() == ConnectionString::SYNC) {
-            SyncClusterConnection* scc = dynamic_cast<SyncClusterConnection*>(conn);
-            if (scc) {
-                scc->attachQueryHandler(new SCCFastQueryHandler);
-            }
-        }
     }
 
-    void ShardingConnectionHook::onDestroy(DBClientBase * conn) {
-        if (_shardedConnections && versionManager.isVersionableCB(conn)){
-            versionManager.resetShardVersionCB(conn);
+    if (_shardedConnections) {
+        // For every DBClient created by mongos, add a hook that will capture the response from
+        // commands we pass along from the client, so that we can target the correct node when
+        // subsequent getLastError calls are made by mongos.
+        conn->setReplyMetadataReader([](const BSONObj& metadataObj, StringData hostString)
+                                         -> Status {
+                                             saveGLEStats(metadataObj, hostString);
+                                             return Status::OK();
+                                         });
+    }
+
+    // For every DBClient created by mongos, add a hook that will append impersonated users
+    // to the end of every runCommand.  mongod uses this information to produce auditing
+    // records attributed to the proper authenticated user(s).
+    conn->setRequestMetadataWriter([](BSONObjBuilder* metadataBob) -> Status {
+        audit::writeImpersonatedUsersToMetadata(metadataBob);
+        return Status::OK();
+    });
+
+    // For every SCC created, add a hook that will allow fastest-config-first config reads if
+    // the appropriate server options are set.
+    if (conn->type() == ConnectionString::SYNC) {
+        SyncClusterConnection* scc = dynamic_cast<SyncClusterConnection*>(conn);
+        if (scc) {
+            scc->attachQueryHandler(new SCCFastQueryHandler);
         }
     }
+}
 
-    void ShardingConnectionHook::onRelease(DBClientBase* conn) {
-        // This is currently for making the replica set connections release
-        // secondary connections to the pool.
-        conn->reset();
+void ShardingConnectionHook::onDestroy(DBClientBase* conn) {
+    if (_shardedConnections && versionManager.isVersionableCB(conn)) {
+        versionManager.resetShardVersionCB(conn);
     }
+}
 
-} // namespace mongo
+void ShardingConnectionHook::onRelease(DBClientBase* conn) {
+    // This is currently for making the replica set connections release
+    // secondary connections to the pool.
+    conn->reset();
+}
+
+}  // namespace mongo

@@ -28,7 +28,6 @@
 
 #pragma once
 
-#include <boost/thread/mutex.hpp>
 #include <string>
 
 #include "mongo/base/disallow_copying.h"
@@ -40,45 +39,28 @@
 
 namespace mongo {
 
-    /**
-     * The implementation of AuthzManagerExternalState functionality for mongod.
-     */
-    class AuthzManagerExternalStateMongod : public AuthzManagerExternalStateLocal {
-        MONGO_DISALLOW_COPYING(AuthzManagerExternalStateMongod);
+/**
+ * The implementation of AuthzManagerExternalState functionality for mongod.
+ */
+class AuthzManagerExternalStateMongod : public AuthzManagerExternalStateLocal {
+    MONGO_DISALLOW_COPYING(AuthzManagerExternalStateMongod);
 
-    public:
-        AuthzManagerExternalStateMongod();
-        virtual ~AuthzManagerExternalStateMongod();
+public:
+    AuthzManagerExternalStateMongod();
+    virtual ~AuthzManagerExternalStateMongod();
 
-        std::unique_ptr<AuthzSessionExternalState> makeAuthzSessionExternalState(
-                AuthorizationManager* authzManager) override;
+    std::unique_ptr<AuthzSessionExternalState> makeAuthzSessionExternalState(
+        AuthorizationManager* authzManager) override;
 
-        virtual Status findOne(OperationContext* txn,
-                               const NamespaceString& collectionName,
-                               const BSONObj& query,
-                               BSONObj* result);
-        virtual Status query(OperationContext* txn,
-                             const NamespaceString& collectionName,
-                             const BSONObj& query,
-                             const BSONObj& projection,
-                             const stdx::function<void(const BSONObj&)>& resultProcessor);
-        virtual Status insert(OperationContext* txn,
-                              const NamespaceString& collectionName,
-                              const BSONObj& document,
-                              const BSONObj& writeConcern);
-        virtual Status update(OperationContext* txn,
-                              const NamespaceString& collectionName,
-                              const BSONObj& query,
-                              const BSONObj& updatePattern,
-                              bool upsert,
-                              bool multi,
-                              const BSONObj& writeConcern,
-                              int* nMatched);
-        virtual Status remove(OperationContext* txn,
-                              const NamespaceString& collectionName,
-                              const BSONObj& query,
-                              const BSONObj& writeConcern,
-                              int* numRemoved);
-    };
+    virtual Status findOne(OperationContext* txn,
+                           const NamespaceString& collectionName,
+                           const BSONObj& query,
+                           BSONObj* result);
+    virtual Status query(OperationContext* txn,
+                         const NamespaceString& collectionName,
+                         const BSONObj& query,
+                         const BSONObj& projection,
+                         const stdx::function<void(const BSONObj&)>& resultProcessor);
+};
 
-} // namespace mongo
+}  // namespace mongo

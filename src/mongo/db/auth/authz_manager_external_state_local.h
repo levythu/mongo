@@ -28,7 +28,6 @@
 
 #pragma once
 
-#include <boost/thread/mutex.hpp>
 #include <string>
 
 #include "mongo/base/disallow_copying.h"
@@ -41,83 +40,112 @@
 
 namespace mongo {
 
+namespace mutablebson {
+class Document;
+}  // namespace mutablebson
+
+/**
+ * Common implementation of AuthzManagerExternalState for systems where role
+ * and user information are stored locally.
+ */
+class AuthzManagerExternalStateLocal : public AuthzManagerExternalState {
+    MONGO_DISALLOW_COPYING(AuthzManagerExternalStateLocal);
+
+public:
+    virtual ~AuthzManagerExternalStateLocal() = default;
+
     /**
-     * Common implementation of AuthzManagerExternalState for systems where role
-     * and user information are stored locally.
+     * Takes a user document, and processes it with the RoleGraph, in order to recursively
+     * resolve roles and add the 'inheritedRoles', 'inheritedPrivileges',
+     * and 'warnings' fields.
      */
-    class AuthzManagerExternalStateLocal : public AuthzManagerExternalState {
-        MONGO_DISALLOW_COPYING(AuthzManagerExternalStateLocal);
+    void resolveUserRoles(mutablebson::Document* userDoc, const std::vector<RoleName>& directRoles);
 
-    public:
-        virtual ~AuthzManagerExternalStateLocal() = default;
+    virtual Status initialize(OperationContext* txn);
 
-        virtual Status initialize(OperationContext* txn);
+    virtual Status getStoredAuthorizationVersion(OperationContext* txn, int* outVersion);
+    virtual Status getUserDescription(OperationContext* txn,
+                                      const UserName& userName,
+                                      BSONObj* result);
+    virtual Status getRoleDescription(const RoleName& roleName,
+                                      bool showPrivileges,
+                                      BSONObj* result);
+    virtual Status getRoleDescriptionsForDB(const std::string dbname,
+                                            bool showPrivileges,
+                                            bool showBuiltinRoles,
+                                            std::vector<BSONObj>* result);
 
-        virtual Status getStoredAuthorizationVersion(OperationContext* txn, int* outVersion);
-        virtual Status getUserDescription(
-                            OperationContext* txn, const UserName& userName, BSONObj* result);
-        virtual Status getRoleDescription(const RoleName& roleName,
-                                          bool showPrivileges,
-                                          BSONObj* result);
-        virtual Status getRoleDescriptionsForDB(const std::string dbname,
-                                                bool showPrivileges,
-                                                bool showBuiltinRoles,
-                                                std::vector<BSONObj>* result);
+    bool hasAnyPrivilegeDocuments(OperationContext* txn) override;
 
-        virtual void logOp(
-                OperationContext* txn,
-                const char* op,
-                const char* ns,
-                const BSONObj& o,
-                BSONObj* o2);
+    /**
+     * Finds a document matching "query" in "collectionName", and store a shared-ownership
+     * copy into "result".
+     *
+     * Returns Status::OK() on success.  If no match is found, returns
+     * ErrorCodes::NoMatchingDocument.  Other errors returned as appropriate.
+     */
+    virtual Status findOne(OperationContext* txn,
+                           const NamespaceString& collectionName,
+                           const BSONObj& query,
+                           BSONObj* result) = 0;
 
-    protected:
-        AuthzManagerExternalStateLocal() = default;
+    /**
+     * Finds all documents matching "query" in "collectionName".  For each document returned,
+     * calls the function resultProcessor on it.
+     */
+    virtual Status query(OperationContext* txn,
+                         const NamespaceString& collectionName,
+                         const BSONObj& query,
+                         const BSONObj& projection,
+                         const stdx::function<void(const BSONObj&)>& resultProcessor) = 0;
 
-        /**
-         * Fetches the user document for "userName" from local storage, and stores it into "result".
-         */
-        virtual Status _getUserDocument(OperationContext* txn,
-                                        const UserName& userName,
-                                        BSONObj* result);
-    private:
-        enum RoleGraphState {
-            roleGraphStateInitial = 0,
-            roleGraphStateConsistent,
-            roleGraphStateHasCycle
-        };
+    virtual void logOp(
+        OperationContext* txn, const char* op, const char* ns, const BSONObj& o, BSONObj* o2);
 
-        /**
-         * RecoveryUnit::Change subclass used to commit work for AuthzManager logOp listener.
-         */
-        class AuthzManagerLogOpHandler;
+protected:
+    AuthzManagerExternalStateLocal() = default;
 
-        /**
-         * Initializes the role graph from the contents of the admin.system.roles collection.
-         */
-        Status _initializeRoleGraph(OperationContext* txn);
-
-        Status _getRoleDescription_inlock(const RoleName& roleName,
-                                          bool showPrivileges,
-                                          BSONObj* result);
-        /**
-         * Eventually consistent, in-memory representation of all roles in the system (both
-         * user-defined and built-in).  Synchronized via _roleGraphMutex.
-         */
-        RoleGraph _roleGraph;
-
-        /**
-         * State of _roleGraph, one of "initial", "consistent" and "has cycle".  Synchronized via
-         * _roleGraphMutex.
-         */
-        RoleGraphState _roleGraphState = roleGraphStateInitial;
-
-        /**
-         * Guards _roleGraphState and _roleGraph.
-         */
-        boost::mutex _roleGraphMutex;
-
-        boost::timed_mutex _authzDataUpdateLock;
+private:
+    enum RoleGraphState {
+        roleGraphStateInitial = 0,
+        roleGraphStateConsistent,
+        roleGraphStateHasCycle
     };
 
-} // namespace mongo
+    /**
+     * RecoveryUnit::Change subclass used to commit work for AuthzManager logOp listener.
+     */
+    class AuthzManagerLogOpHandler;
+
+    /**
+     * Initializes the role graph from the contents of the admin.system.roles collection.
+     */
+    Status _initializeRoleGraph(OperationContext* txn);
+
+    /**
+     * Fetches the user document for "userName" from local storage, and stores it into "result".
+     */
+    Status _getUserDocument(OperationContext* txn, const UserName& userName, BSONObj* result);
+
+    Status _getRoleDescription_inlock(const RoleName& roleName,
+                                      bool showPrivileges,
+                                      BSONObj* result);
+    /**
+     * Eventually consistent, in-memory representation of all roles in the system (both
+     * user-defined and built-in).  Synchronized via _roleGraphMutex.
+     */
+    RoleGraph _roleGraph;
+
+    /**
+     * State of _roleGraph, one of "initial", "consistent" and "has cycle".  Synchronized via
+     * _roleGraphMutex.
+     */
+    RoleGraphState _roleGraphState = roleGraphStateInitial;
+
+    /**
+     * Guards _roleGraphState and _roleGraph.
+     */
+    stdx::mutex _roleGraphMutex;
+};
+
+}  // namespace mongo

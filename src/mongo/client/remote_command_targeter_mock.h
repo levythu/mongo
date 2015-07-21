@@ -28,29 +28,46 @@
 
 #pragma once
 
+#include "mongo/client/connection_string.h"
 #include "mongo/client/remote_command_targeter.h"
 #include "mongo/util/net/hostandport.h"
 
 namespace mongo {
 
-    class RemoteCommandTargeterMock : public RemoteCommandTargeter {
-    public:
-        RemoteCommandTargeterMock();
-        virtual ~RemoteCommandTargeterMock() = default;
+class RemoteCommandTargeterMock final : public RemoteCommandTargeter {
+public:
+    RemoteCommandTargeterMock();
+    virtual ~RemoteCommandTargeterMock();
 
-        /**
-         * Returns the return value last set by setFindHostReturnValue.
-         * Returns ErrorCodes::InternalError if setFindHostReturnValue was never called.
-         */
-        virtual StatusWith<HostAndPort> findHost(const ReadPreferenceSetting& readPref) override;
+    /**
+     * Shortcut for unit-tests.
+     */
+    static RemoteCommandTargeterMock* get(RemoteCommandTargeter* targeter);
 
-        /**
-         * Sets the return value for the next call to findHost.
-         */
-        void setFindHostReturnValue(StatusWith<HostAndPort> returnValue);
+    /**
+     * Returns the value last set by setConnectionStringReturnValue.
+     */
+    ConnectionString connectionString() override;
 
-    private:
-        StatusWith<HostAndPort> _findHostReturnValue;
-    };
+    /**
+     * Returns the return value last set by setFindHostReturnValue.
+     * Returns ErrorCodes::InternalError if setFindHostReturnValue was never called.
+     */
+    StatusWith<HostAndPort> findHost(const ReadPreferenceSetting& readPref) override;
 
-} // namespace mongo
+    /**
+     * Sets the return value for the next call to connectionString.
+     */
+    void setConnectionStringReturnValue(const ConnectionString returnValue);
+
+    /**
+     * Sets the return value for the next call to findHost.
+     */
+    void setFindHostReturnValue(StatusWith<HostAndPort> returnValue);
+
+private:
+    ConnectionString _connectionStringReturnValue;
+    StatusWith<HostAndPort> _findHostReturnValue;
+};
+
+}  // namespace mongo

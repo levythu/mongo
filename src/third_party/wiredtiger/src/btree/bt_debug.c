@@ -188,7 +188,7 @@ __dmsg(WT_DBG *ds, const char *fmt, ...)
 		}
 	} else {
 		va_start(ap, fmt);
-		(void)vfprintf(ds->fp, fmt, ap);
+		(void)__wt_vfprintf(ds->fp, fmt, ap);
 		va_end(ap);
 	}
 }
@@ -202,13 +202,14 @@ __wt_debug_addr_print(
     WT_SESSION_IMPL *session, const uint8_t *addr, size_t addr_size)
 {
 	WT_DECL_ITEM(buf);
+	WT_DECL_RET;
 
 	WT_RET(__wt_scr_alloc(session, 128, &buf));
-	fprintf(stderr, "%s\n",
-	    __wt_addr_string(session, addr, addr_size, buf));
+	ret = __wt_fprintf(stderr,
+	    "%s\n", __wt_addr_string(session, addr, addr_size, buf));
 	__wt_scr_free(session, &buf);
 
-	return (0);
+	return (ret);
 }
 
 /*
@@ -333,6 +334,8 @@ __wt_debug_disk(
 
 	if (F_ISSET(dsk, WT_PAGE_COMPRESSED))
 		__dmsg(ds, ", compressed");
+	if (F_ISSET(dsk, WT_PAGE_ENCRYPTED))
+		__dmsg(ds, ", encrypted");
 	if (F_ISSET(dsk, WT_PAGE_EMPTY_V_ALL))
 		__dmsg(ds, ", empty-all");
 	if (F_ISSET(dsk, WT_PAGE_EMPTY_V_NONE))
@@ -437,7 +440,7 @@ __debug_tree_shape_worker(WT_DBG *ds, WT_PAGE *page, int level)
 
 	session = ds->session;
 
-	if (page->type == WT_PAGE_ROW_INT || page->type == WT_PAGE_COL_INT) {
+	if (WT_PAGE_IS_INTERNAL(page)) {
 		__dmsg(ds, "%*s" "I" "%d %s\n",
 		    level * 3, " ", level, __debug_tree_shape_info(page));
 		WT_INTL_FOREACH_BEGIN(session, page, ref) {
@@ -640,8 +643,6 @@ __debug_page_metadata(WT_DBG *ds, WT_PAGE *page)
 		__dmsg(ds, ", disk-mapped");
 	if (F_ISSET_ATOMIC(page, WT_PAGE_EVICT_LRU))
 		__dmsg(ds, ", evict-lru");
-	if (F_ISSET_ATOMIC(page, WT_PAGE_REFUSE_DEEPEN))
-		__dmsg(ds, ", refuse-deepen");
 	if (F_ISSET_ATOMIC(page, WT_PAGE_SCANNING))
 		__dmsg(ds, ", scanning");
 	if (F_ISSET_ATOMIC(page, WT_PAGE_SPLIT_INSERT))

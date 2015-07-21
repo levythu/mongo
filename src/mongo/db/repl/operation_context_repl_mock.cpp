@@ -36,59 +36,50 @@
 namespace mongo {
 namespace repl {
 
-    OperationContextReplMock::OperationContextReplMock():
-            _lockState(new MMAPV1LockerImpl()),
-            _opID(0),
-            _checkForInterruptStatus(Status::OK()),
-            _maxTimeMicrosRemaining(0),
-            _writesAreReplicated(true) {
+OperationContextReplMock::OperationContextReplMock() : OperationContextReplMock(0) {}
+
+OperationContextReplMock::OperationContextReplMock(unsigned int opNum)
+    : OperationContextReplMock(nullptr, opNum) {}
+
+OperationContextReplMock::OperationContextReplMock(Client* client, unsigned int opNum)
+    : OperationContextNoop(client, opNum, new MMAPV1LockerImpl()),
+      _checkForInterruptStatus(Status::OK()),
+      _maxTimeMicrosRemaining(0),
+      _writesAreReplicated(true) {}
+
+OperationContextReplMock::~OperationContextReplMock() = default;
+
+void OperationContextReplMock::checkForInterrupt() {
+    uassertStatusOK(checkForInterruptNoAssert());
+}
+
+Status OperationContextReplMock::checkForInterruptNoAssert() {
+    if (!_checkForInterruptStatus.isOK()) {
+        return _checkForInterruptStatus;
     }
 
-    OperationContextReplMock::~OperationContextReplMock() {}
+    return Status::OK();
+}
 
-    Locker* OperationContextReplMock::lockState() const {
-        return _lockState.get();
-    }
+void OperationContextReplMock::setCheckForInterruptStatus(Status status) {
+    _checkForInterruptStatus = std::move(status);
+}
 
-    unsigned int OperationContextReplMock::getOpID() const {
-        return _opID;
-    }
+uint64_t OperationContextReplMock::getRemainingMaxTimeMicros() const {
+    return _maxTimeMicrosRemaining;
+}
 
-    void OperationContextReplMock::setOpID(unsigned int opID) {
-        _opID = opID;
-    }
+void OperationContextReplMock::setRemainingMaxTimeMicros(uint64_t micros) {
+    _maxTimeMicrosRemaining = micros;
+}
 
-    void OperationContextReplMock::checkForInterrupt() const {
-        uassertStatusOK(checkForInterruptNoAssert());
-    }
+void OperationContextReplMock::setReplicatedWrites(bool writesAreReplicated) {
+    _writesAreReplicated = writesAreReplicated;
+}
 
-    Status OperationContextReplMock::checkForInterruptNoAssert() const {
-        if (!_checkForInterruptStatus.isOK()) {
-            return _checkForInterruptStatus;
-        }
-
-        return Status::OK();
-    }
-
-    void OperationContextReplMock::setCheckForInterruptStatus(Status status) {
-        _checkForInterruptStatus = std::move(status);
-    }
-
-    uint64_t OperationContextReplMock::getRemainingMaxTimeMicros() const {
-        return _maxTimeMicrosRemaining;
-    }
-
-    void OperationContextReplMock::setRemainingMaxTimeMicros(uint64_t micros) {
-        _maxTimeMicrosRemaining = micros;
-    }
-
-    void OperationContextReplMock::setReplicatedWrites(bool writesAreReplicated) {
-        _writesAreReplicated = writesAreReplicated;
-    }
-
-    bool OperationContextReplMock::writesAreReplicated() const {
-        return _writesAreReplicated;
-    }
+bool OperationContextReplMock::writesAreReplicated() const {
+    return _writesAreReplicated;
+}
 
 }  // namespace repl
 }  // namespace mongo

@@ -28,7 +28,6 @@
 
 #pragma once
 
-#include <boost/thread/mutex.hpp>
 #include <list>
 #include <string>
 #include <vector>
@@ -36,165 +35,169 @@
 #include "mongo/base/disallow_copying.h"
 #include "mongo/base/status.h"
 #include "mongo/bson/bsonobj.h"
+#include "mongo/client/fetcher.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/repl/collection_cloner.h"
 #include "mongo/db/repl/base_cloner.h"
-#include "mongo/db/repl/fetcher.h"
 #include "mongo/db/repl/replication_executor.h"
+#include "mongo/stdx/condition_variable.h"
+#include "mongo/stdx/mutex.h"
 #include "mongo/util/net/hostandport.h"
 
 namespace mongo {
 namespace repl {
 
-    class DatabaseCloner : public BaseCloner {
-        MONGO_DISALLOW_COPYING(DatabaseCloner);
-    public:
+class DatabaseCloner : public BaseCloner {
+    MONGO_DISALLOW_COPYING(DatabaseCloner);
 
-        /**
-         * Predicate used on the collection info objects returned by listCollections.
-         * Each collection info is represented by a document in the following format:
-         * {
-         *     name: <collection name>,
-         *     options: <collection options>
-         * }
-         *
-         * Returns true if the collection described by the info object should be cloned.
-         * Returns false if the collection should be ignored.
-         */
-        using ListCollectionsPredicateFn = stdx::function<bool (const BSONObj&)>;
+public:
+    /**
+     * Predicate used on the collection info objects returned by listCollections.
+     * Each collection info is represented by a document in the following format:
+     * {
+     *     name: <collection name>,
+     *     options: <collection options>
+     * }
+     *
+     * Returns true if the collection described by the info object should be cloned.
+     * Returns false if the collection should be ignored.
+     */
+    using ListCollectionsPredicateFn = stdx::function<bool(const BSONObj&)>;
 
-        /**
-         * Type of function to create a storage interface instance for
-         * the collection cloner.
-         */
-        using CreateStorageInterfaceFn = stdx::function<CollectionCloner::StorageInterface* ()>;
+    /**
+     * Callback function to report progress of collection cloning. Arguments are:
+     *     - status from the collection cloner's 'onCompletion' callback.
+     *     - source namespace of the collection cloner that completed (or failed).
+     *
+     * Called exactly once for every collection cloner started by the the database cloner.
+     */
+    using CollectionCallbackFn = stdx::function<void(const Status&, const NamespaceString&)>;
 
-        /**
-         * Callback function to report progress of collection cloning. Arguments are:
-         *     - status from the collection cloner's 'work' callback.
-         *     - source namespace of the collection cloner that completed (or failed).
-         *
-         * Called exactly once for every collection cloner started by the the database cloner.
-         */
-        using CollectionCallbackFn = stdx::function<void (const Status&, const NamespaceString&)>;
+    /**
+     * Type of function to start a collection cloner.
+     */
+    using StartCollectionClonerFn = stdx::function<Status(CollectionCloner&)>;
 
-        /**
-         * Type of function to start a collection cloner.
-         */
-        using StartCollectionClonerFn = stdx::function<Status (CollectionCloner&)>;
+    /**
+     * Creates DatabaseCloner task in inactive state. Use start() to activate cloner.
+     *
+     * The cloner calls 'onCompletion' when the database cloning has completed or failed.
+     *
+     * 'onCompletion' will be called exactly once.
+     *
+     * Takes ownership of the passed StorageInterface object.
+     */
+    DatabaseCloner(ReplicationExecutor* executor,
+                   const HostAndPort& source,
+                   const std::string& dbname,
+                   const BSONObj& listCollectionsFilter,
+                   const ListCollectionsPredicateFn& listCollectionsPredicate,
+                   CollectionCloner::StorageInterface* storageInterface,
+                   const CollectionCallbackFn& collectionWork,
+                   const CallbackFn& onCompletion);
 
-        /**
-         * Creates DatabaseCloner task in inactive state. Use start() to activate cloner.
-         *
-         * The cloner calls 'work' when the database cloning has completed or failed.
-         *
-         * 'work' will be called exactly once.
-         *
-         * Takes ownership of the passed StorageInterface object.
-         */
-        DatabaseCloner(ReplicationExecutor* executor,
-                       const HostAndPort& source,
-                       const std::string& dbname,
-                       const BSONObj& listCollectionsFilter,
-                       const ListCollectionsPredicateFn& listCollectionsPredicate,
-                       const CreateStorageInterfaceFn& createStorageInterface,
-                       const CollectionCallbackFn& collectionWork,
-                       const CallbackFn& work);
+    virtual ~DatabaseCloner();
 
-        virtual ~DatabaseCloner() = default;
+    /**
+     * Returns collection info objects read from listCollections result.
+     * This will return an empty vector until we have processed the last
+     * batch of results from listCollections.
+     */
+    const std::vector<BSONObj>& getCollectionInfos() const;
 
-        /**
-         * Returns collection info objects read from listCollections result.
-         * This will return an empty vector until we have processed the last
-         * batch of results from listCollections.
-         */
-        const std::vector<BSONObj>& getCollectionInfos() const;
+    std::string getDiagnosticString() const override;
 
-        std::string getDiagnosticString() const override;
+    bool isActive() const override;
 
-        bool isActive() const override;
+    Status start() override;
 
-        Status start() override;
+    void cancel() override;
 
-        void cancel() override;
+    void wait() override;
 
-        //
-        // Testing only functions below.
-        //
+    //
+    // Testing only functions below.
+    //
 
-        void wait() override;
+    /**
+     * Overrides how executor schedules database work.
+     *
+     * For testing only.
+     */
+    void setScheduleDbWorkFn(const CollectionCloner::ScheduleDbWorkFn& scheduleDbWorkFn);
 
-        /**
-         * Overrides how executor schedules database work.
-         *
-         * For testing only.
-         */
-        void setScheduleDbWorkFn(const CollectionCloner::ScheduleDbWorkFn& scheduleDbWorkFn);
+    /**
+     * Overrides how executor starts a collection cloner.
+     *
+     * For testing only
+     */
+    void setStartCollectionClonerFn(const StartCollectionClonerFn& startCollectionCloner);
 
-        /**
-         * Overrides how executor starts a collection cloner.
-         *
-         * For testing only
-         */
-        void setStartCollectionClonerFn(const StartCollectionClonerFn& startCollectionCloner);
+private:
+    /**
+     * Read collection names and options from listCollections result.
+     */
+    void _listCollectionsCallback(const StatusWith<Fetcher::QueryResponse>& fetchResult,
+                                  Fetcher::NextAction* nextAction,
+                                  BSONObjBuilder* getMoreBob);
 
-    private:
+    /**
+     * Forwards collection cloner result to client.
+     * Starts a new cloner on a different collection.
+     */
+    void _collectionClonerCallback(const Status& status, const NamespaceString& nss);
 
-        /**
-         * Read collection names and options from listCollections result.
-         */
-        void _listCollectionsCallback(const StatusWith<Fetcher::BatchData>& fetchResult,
-                                      Fetcher::NextAction* nextAction);
+    /**
+     * Reports completion status.
+     * Sets cloner to inactive.
+     */
+    void _finishCallback(const Status& status);
 
-        /**
-         * Forwards collection cloner result to client.
-         * Starts a new cloner on a different collection.
-         */
-        void _collectionClonerCallback(const Status& status, const NamespaceString& nss);
+    // Not owned by us.
+    ReplicationExecutor* _executor;
 
-        // Not owned by us.
-        ReplicationExecutor* _executor;
+    HostAndPort _source;
+    std::string _dbname;
+    BSONObj _listCollectionsFilter;
+    ListCollectionsPredicateFn _listCollectionsPredicate;
+    CollectionCloner::StorageInterface* _storageInterface;
 
-        HostAndPort _source;
-        std::string _dbname;
-        BSONObj _listCollectionsFilter;
-        ListCollectionsPredicateFn _listCollectionsPredicate;
-        CreateStorageInterfaceFn _createStorageInterface;
+    // Invoked once for every successfully started collection cloner.
+    CollectionCallbackFn _collectionWork;
 
-        // Invoked once for every successfully started collection cloner.
-        CollectionCallbackFn _collectionWork;
+    // Invoked once when cloning completes or fails.
+    CallbackFn _onCompletion;
 
-        // Invoked once when cloning completes or fails.
-        CallbackFn _work;
+    // Protects member data of this database cloner.
+    mutable stdx::mutex _mutex;
 
-        // Protects member data of this database cloner.
-        mutable boost::mutex _mutex;
+    mutable stdx::condition_variable _condition;
 
-        // _active is true when database cloner is started.
-        bool _active;
+    // _active is true when database cloner is started.
+    bool _active;
 
-        // Fetcher instance for running listCollections command.
-        Fetcher _listCollectionsFetcher;
+    // Fetcher instance for running listCollections command.
+    Fetcher _listCollectionsFetcher;
 
-        // Collection info objects returned from listCollections.
-        // Format of each document:
-        // {
-        //     name: <collection name>,
-        //     options: <collection options>
-        // }
-        // Holds all collection infos from listCollections.
-        std::vector<BSONObj> _collectionInfos;
+    // Collection info objects returned from listCollections.
+    // Format of each document:
+    // {
+    //     name: <collection name>,
+    //     options: <collection options>
+    // }
+    // Holds all collection infos from listCollections.
+    std::vector<BSONObj> _collectionInfos;
 
-        std::vector<NamespaceString> _collectionNamespaces;
+    std::vector<NamespaceString> _collectionNamespaces;
 
-        std::list<CollectionCloner> _collectionCloners;
-        std::list<CollectionCloner>::iterator _currentCollectionClonerIter;
+    std::list<CollectionCloner> _collectionCloners;
+    std::list<CollectionCloner>::iterator _currentCollectionClonerIter;
 
-        // Function for scheduling database work using the executor.
-        CollectionCloner::ScheduleDbWorkFn _scheduleDbWorkFn;
+    // Function for scheduling database work using the executor.
+    CollectionCloner::ScheduleDbWorkFn _scheduleDbWorkFn;
 
-        StartCollectionClonerFn _startCollectionCloner;
-    };
+    StartCollectionClonerFn _startCollectionCloner;
+};
 
-} // namespace repl
-} // namespace mongo
+}  // namespace repl
+}  // namespace mongo

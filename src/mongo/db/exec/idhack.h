@@ -28,6 +28,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "mongo/db/catalog/collection.h"
 #include "mongo/db/exec/plan_stage.h"
 #include "mongo/db/query/canonical_query.h"
@@ -35,79 +37,83 @@
 
 namespace mongo {
 
+class RecordCursor;
+
+/**
+ * A standalone stage implementing the fast path for key-value retrievals
+ * via the _id index.
+ */
+class IDHackStage : public PlanStage {
+public:
+    /** Takes ownership of all the arguments -collection. */
+    IDHackStage(OperationContext* txn,
+                const Collection* collection,
+                CanonicalQuery* query,
+                WorkingSet* ws);
+
+    IDHackStage(OperationContext* txn, Collection* collection, const BSONObj& key, WorkingSet* ws);
+
+    virtual ~IDHackStage();
+
+    virtual bool isEOF();
+    virtual StageState work(WorkingSetID* out);
+
+    virtual void doSaveState();
+    virtual void doRestoreState();
+    virtual void doDetachFromOperationContext();
+    virtual void doReattachToOperationContext(OperationContext* opCtx);
+    virtual void doInvalidate(OperationContext* txn, const RecordId& dl, InvalidationType type);
+
     /**
-     * A standalone stage implementing the fast path for key-value retrievals
-     * via the _id index.
+     * ID Hack has a very strict criteria for the queries it supports.
      */
-    class IDHackStage : public PlanStage {
-    public:
-        /** Takes ownership of all the arguments -collection. */
-        IDHackStage(OperationContext* txn, const Collection* collection,
-                    CanonicalQuery* query, WorkingSet* ws);
+    static bool supportsQuery(const CanonicalQuery& query);
 
-        IDHackStage(OperationContext* txn, Collection* collection,
-                    const BSONObj& key, WorkingSet* ws);
+    virtual StageType stageType() const {
+        return STAGE_IDHACK;
+    }
 
-        virtual ~IDHackStage();
+    std::unique_ptr<PlanStageStats> getStats();
 
-        virtual bool isEOF();
-        virtual StageState work(WorkingSetID* out);
+    virtual const SpecificStats* getSpecificStats() const;
 
-        virtual void saveState();
-        virtual void restoreState(OperationContext* opCtx);
-        virtual void invalidate(OperationContext* txn, const RecordId& dl, InvalidationType type);
+    static const char* kStageType;
 
-        /**
-         * ID Hack has a very strict criteria for the queries it supports.
-         */
-        static bool supportsQuery(const CanonicalQuery& query);
+private:
+    /**
+     * Marks this stage as done, optionally adds key metadata, and returns PlanStage::ADVANCED.
+     *
+     * Called whenever we have a WSM containing the matching obj.
+     */
+    StageState advance(WorkingSetID id, WorkingSetMember* member, WorkingSetID* out);
 
-        virtual std::vector<PlanStage*> getChildren() const;
+    // transactional context for read locks. Not owned by us
+    OperationContext* _txn;
 
-        virtual StageType stageType() const { return STAGE_IDHACK; }
+    // Not owned here.
+    const Collection* _collection;
 
-        PlanStageStats* getStats();
+    std::unique_ptr<RecordCursor> _recordCursor;
 
-        virtual const CommonStats* getCommonStats() const;
+    // The WorkingSet we annotate with results.  Not owned by us.
+    WorkingSet* _workingSet;
 
-        virtual const SpecificStats* getSpecificStats() const;
+    // The value to match against the _id field.
+    BSONObj _key;
 
-        static const char* kStageType;
+    // Have we returned our one document?
+    bool _done;
 
-    private:
-        /**
-         * Marks this stage as done, optionally adds key metadata, and returns PlanStage::ADVANCED.
-         *
-         * Called whenever we have a WSM containing the matching obj.
-         */
-        StageState advance(WorkingSetID id, WorkingSetMember* member, WorkingSetID* out);
+    // Do we need to add index key metadata for $returnKey?
+    bool _addKeyMetadata;
 
-        // transactional context for read locks. Not owned by us
-        OperationContext* _txn;
+    // If we want to return a RecordId and it points to something that's not in memory,
+    // we return a "please page this in" result. We add a RecordFetcher given back to us by the
+    // storage engine to the WSM. The RecordFetcher is used by the PlanExecutor when it handles
+    // the fetch request.
+    WorkingSetID _idBeingPagedIn;
 
-        // Not owned here.
-        const Collection* _collection;
-
-        // The WorkingSet we annotate with results.  Not owned by us.
-        WorkingSet* _workingSet;
-
-        // The value to match against the _id field.
-        BSONObj _key;
-
-        // Have we returned our one document?
-        bool _done;
-
-        // Do we need to add index key metadata for $returnKey?
-        bool _addKeyMetadata;
-
-        // If we want to return a RecordId and it points to something that's not in memory,
-        // we return a "please page this in" result. We add a RecordFetcher given back to us by the
-        // storage engine to the WSM. The RecordFetcher is used by the PlanExecutor when it handles
-        // the fetch request.
-        WorkingSetID _idBeingPagedIn;
-
-        CommonStats _commonStats;
-        IDHackStats _specificStats;
-    };
+    IDHackStats _specificStats;
+};
 
 }  // namespace mongo

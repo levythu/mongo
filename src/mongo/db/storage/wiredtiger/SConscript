@@ -10,12 +10,14 @@ if wiredtiger:
     wtEnv.Library(
         target='storage_wiredtiger_core',
         source= [
+            'wiredtiger_customization_hooks.cpp',
             'wiredtiger_global_options.cpp',
             'wiredtiger_index.cpp',
             'wiredtiger_kv_engine.cpp',
             'wiredtiger_record_store.cpp',
             'wiredtiger_recovery_unit.cpp',
             'wiredtiger_session_cache.cpp',
+            'wiredtiger_snapshot_manager.cpp',
             'wiredtiger_size_storer.cpp',
             'wiredtiger_util.cpp',
             ],

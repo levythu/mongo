@@ -30,31 +30,40 @@
 
 #include "third_party/s2/s2region.h"
 
-#include "mongo/db/jsobj.h"
+#include "mongo/db/geo/hash.h"
 #include "mongo/db/geo/shapes.h"
-#include "mongo/db/query/index_bounds_builder.h" // For OrderedIntervalList
+#include "mongo/db/index/s2_indexing_params.h"
+#include "mongo/db/jsobj.h"
+#include "mongo/db/query/index_bounds_builder.h"  // For OrderedIntervalList
 
 namespace mongo {
 
-    /**
-     * Functions that compute expression index mappings.
-     *
-     * TODO: I think we could structure this more generally with respect to planning.
-     */
-    class ExpressionMapping {
-    public:
+/**
+ * Functions that compute expression index mappings.
+ *
+ * TODO: I think we could structure this more generally with respect to planning.
+ */
+class ExpressionMapping {
+public:
+    static BSONObj hash(const BSONElement& value);
 
-        static BSONObj hash(const BSONElement& value);
+    static std::vector<GeoHash> get2dCovering(const R2Region& region,
+                                              const BSONObj& indexInfoObj,
+                                              int maxCoveringCells);
 
-        static void cover2d(const R2Region& region,
-                            const BSONObj& indexInfoObj,
-                            int maxCoveringCells,
-                            OrderedIntervalList* oil);
+    static void GeoHashsToIntervalsWithParents(const std::vector<GeoHash>& unorderedCovering,
+                                               OrderedIntervalList* oilOut);
 
-        // TODO: what should we really pass in for indexInfoObj?
-        static void cover2dsphere(const S2Region& region,
-                                  const BSONObj& indexInfoObj,
-                                  OrderedIntervalList* oilOut);
-    };
+    static void cover2d(const R2Region& region,
+                        const BSONObj& indexInfoObj,
+                        int maxCoveringCells,
+                        OrderedIntervalList* oilOut);
+
+    static std::vector<S2CellId> get2dsphereCovering(const S2Region& region);
+
+    static void cover2dsphere(const S2Region& region,
+                              const S2IndexingParams& indexParams,
+                              OrderedIntervalList* oilOut);
+};
 
 }  // namespace mongo

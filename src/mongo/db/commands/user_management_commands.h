@@ -35,165 +35,112 @@
 #include "mongo/db/auth/privilege.h"
 #include "mongo/db/auth/role_name.h"
 #include "mongo/db/auth/user_name.h"
-#include "mongo/platform/unordered_set.h"
 
 namespace mongo {
 
-    class AuthorizationManager;
-    class AuthorizationSession;
-    struct BSONArray;
-    class BSONObj;
-    class ClientBasic;
-    class OperationContext;
+class AuthorizationManager;
+class AuthorizationSession;
+struct BSONArray;
+class BSONObj;
+class ClientBasic;
+class OperationContext;
 
 namespace auth {
 
-    /**
-     * Looks for a field name "pwd" in the given BSONObj and if found replaces its contents with the
-     * string "xxx" so that password data on the command object used in executing a user management
-     * command isn't exposed in the logs.
-     */
-    void redactPasswordData(mutablebson::Element parent);
+/**
+ * Looks for a field name "pwd" in the given BSONObj and if found replaces its contents with the
+ * string "xxx" so that password data on the command object used in executing a user management
+ * command isn't exposed in the logs.
+ */
+void redactPasswordData(mutablebson::Element parent);
 
-    BSONArray roleSetToBSONArray(const unordered_set<RoleName>& roles);
+//
+// checkAuthorizedTo* methods
+//
 
-    BSONArray rolesVectorToBSONArray(const std::vector<RoleName>& roles);
+Status checkAuthorizedToGrantRoles(AuthorizationSession* authzSession,
+                                   const std::vector<RoleName>& roles);
 
-    Status privilegeVectorToBSONArray(const PrivilegeVector& privileges, BSONArray* result);
+Status checkAuthorizedToGrantPrivileges(AuthorizationSession* authzSession,
+                                        const PrivilegeVector& privileges);
 
-    /**
-     * Used to get all current roles of the user identified by 'userName'.
-     */
-    Status getCurrentUserRoles(OperationContext* txn,
-                               AuthorizationManager* authzManager,
-                               const UserName& userName,
-                               unordered_set<RoleName>* roles);
+Status checkAuthorizedToRevokeRoles(AuthorizationSession* authzSession,
+                                    const std::vector<RoleName>& roles);
 
-    /**
-     * Checks that every role in "rolesToAdd" exists, that adding each of those roles to "role"
-     * will not result in a cycle to the role graph, and that every role being added comes from the
-     * same database as the role it is being added to (or that the role being added to is from the
-     * "admin" database.
-     */
-    Status checkOkayToGrantRolesToRole(const RoleName& role,
-                                       const std::vector<RoleName> rolesToAdd,
-                                       AuthorizationManager* authzManager);
+Status checkAuthorizedToRevokePrivileges(AuthorizationSession* authzSession,
+                                         const PrivilegeVector& privileges);
 
-    /**
-     * Checks that every privilege being granted targets just the database the role is from, or that
-     * the role is from the "admin" db.
-     */
-    Status checkOkayToGrantPrivilegesToRole(const RoleName& role,
-                                            const PrivilegeVector& privileges);
+//
+// checkAuthFor*Command methods
+//
 
-    /**
-     * Returns Status::OK() if the current Auth schema version is at least the auth schema version
-     * for the MongoDB 2.6 and 3.0 MongoDB-CR/SCRAM mixed auth mode.
-     * Returns an error otherwise.
-     */
-    Status requireAuthSchemaVersion26Final(OperationContext* txn,
-                                           AuthorizationManager* authzManager);
+Status checkAuthForCreateUserCommand(ClientBasic* client,
+                                     const std::string& dbname,
+                                     const BSONObj& cmdObj);
 
-    /**
-     * Returns Status::OK() if the current Auth schema version is at least the auth schema version
-     * for MongoDB 2.6 during the upgrade process.
-     * Returns an error otherwise.
-     */
-    Status requireAuthSchemaVersion26UpgradeOrFinal(OperationContext* txn,
-                                                    AuthorizationManager* authzManager);
+Status checkAuthForUpdateUserCommand(ClientBasic* client,
+                                     const std::string& dbname,
+                                     const BSONObj& cmdObj);
 
-    void appendBSONObjToBSONArrayBuilder(BSONArrayBuilder* array, const BSONObj& obj);
+Status checkAuthForGrantRolesToUserCommand(ClientBasic* client,
+                                           const std::string& dbname,
+                                           const BSONObj& cmdObj);
 
-    //
-    // checkAuthorizedTo* methods
-    //
+Status checkAuthForCreateRoleCommand(ClientBasic* client,
+                                     const std::string& dbname,
+                                     const BSONObj& cmdObj);
 
-    Status checkAuthorizedToGrantRoles(AuthorizationSession* authzSession,
-                                       const std::vector<RoleName>& roles);
+Status checkAuthForUpdateRoleCommand(ClientBasic* client,
+                                     const std::string& dbname,
+                                     const BSONObj& cmdObj);
 
-    Status checkAuthorizedToGrantPrivileges(AuthorizationSession* authzSession,
-                                            const PrivilegeVector& privileges);
+Status checkAuthForGrantRolesToRoleCommand(ClientBasic* client,
+                                           const std::string& dbname,
+                                           const BSONObj& cmdObj);
 
-    Status checkAuthorizedToRevokeRoles(AuthorizationSession* authzSession,
-                                        const std::vector<RoleName>& roles);
+Status checkAuthForGrantPrivilegesToRoleCommand(ClientBasic* client,
+                                                const std::string& dbname,
+                                                const BSONObj& cmdObj);
 
-    Status checkAuthorizedToRevokePrivileges(AuthorizationSession* authzSession,
-                                             const PrivilegeVector& privileges);
+Status checkAuthForDropAllUsersFromDatabaseCommand(ClientBasic* client, const std::string& dbname);
 
-    //
-    // checkAuthFor*Command methods
-    //
+Status checkAuthForRevokeRolesFromUserCommand(ClientBasic* client,
+                                              const std::string& dbname,
+                                              const BSONObj& cmdObj);
 
-    Status checkAuthForCreateUserCommand(ClientBasic* client,
-                                         const std::string& dbname,
-                                         const BSONObj& cmdObj);
+Status checkAuthForRevokeRolesFromRoleCommand(ClientBasic* client,
+                                              const std::string& dbname,
+                                              const BSONObj& cmdObj);
 
-    Status checkAuthForUpdateUserCommand(ClientBasic* client,
-                                         const std::string& dbname,
-                                         const BSONObj& cmdObj);
+Status checkAuthForDropUserCommand(ClientBasic* client,
+                                   const std::string& dbname,
+                                   const BSONObj& cmdObj);
 
-    Status checkAuthForGrantRolesToUserCommand(ClientBasic* client,
-                                               const std::string& dbname,
-                                               const BSONObj& cmdObj);
-
-    Status checkAuthForCreateRoleCommand(ClientBasic* client,
-                                         const std::string& dbname,
-                                         const BSONObj& cmdObj);
-
-    Status checkAuthForUpdateRoleCommand(ClientBasic* client,
-                                         const std::string& dbname,
-                                         const BSONObj& cmdObj);
-
-    Status checkAuthForGrantRolesToRoleCommand(ClientBasic* client,
-                                               const std::string& dbname,
-                                               const BSONObj& cmdObj);
-
-    Status checkAuthForGrantPrivilegesToRoleCommand(ClientBasic* client,
-                                                    const std::string& dbname,
-                                                    const BSONObj& cmdObj);
-
-    Status checkAuthForDropAllUsersFromDatabaseCommand(ClientBasic* client,
-                                                       const std::string& dbname);
-
-    Status checkAuthForRevokeRolesFromUserCommand(ClientBasic* client,
-                                                  const std::string& dbname,
-                                                  const BSONObj& cmdObj);
-
-    Status checkAuthForRevokeRolesFromRoleCommand(ClientBasic* client,
-                                                  const std::string& dbname,
-                                                  const BSONObj& cmdObj);
-
-    Status checkAuthForDropUserCommand(ClientBasic* client,
-                                       const std::string& dbname,
-                                       const BSONObj& cmdObj);
-
-    Status checkAuthForDropRoleCommand(ClientBasic* client,
-                                       const std::string& dbname,
-                                       const BSONObj& cmdObj);
+Status checkAuthForDropRoleCommand(ClientBasic* client,
+                                   const std::string& dbname,
+                                   const BSONObj& cmdObj);
 
 
-    Status checkAuthForUsersInfoCommand(ClientBasic* client,
-                                        const std::string& dbname,
-                                        const BSONObj& cmdObj);
+Status checkAuthForUsersInfoCommand(ClientBasic* client,
+                                    const std::string& dbname,
+                                    const BSONObj& cmdObj);
 
-    Status checkAuthForRevokePrivilegesFromRoleCommand(ClientBasic* client,
-                                                       const std::string& dbname,
-                                                       const BSONObj& cmdObj);
+Status checkAuthForRevokePrivilegesFromRoleCommand(ClientBasic* client,
+                                                   const std::string& dbname,
+                                                   const BSONObj& cmdObj);
 
-    Status checkAuthForDropAllRolesFromDatabaseCommand(ClientBasic* client,
-                                                       const std::string& dbname);
+Status checkAuthForDropAllRolesFromDatabaseCommand(ClientBasic* client, const std::string& dbname);
 
-    Status checkAuthForRolesInfoCommand(ClientBasic* client,
-                                        const std::string& dbname,
-                                        const BSONObj& cmdObj);
+Status checkAuthForRolesInfoCommand(ClientBasic* client,
+                                    const std::string& dbname,
+                                    const BSONObj& cmdObj);
 
-    Status checkAuthForInvalidateUserCacheCommand(ClientBasic* client);
+Status checkAuthForInvalidateUserCacheCommand(ClientBasic* client);
 
-    Status checkAuthForGetUserCacheGenerationCommand(ClientBasic* client);
+Status checkAuthForGetUserCacheGenerationCommand(ClientBasic* client);
 
-    Status checkAuthForMergeAuthzCollectionsCommand(ClientBasic* client,
-                                                    const BSONObj& cmdObj);
+Status checkAuthForMergeAuthzCollectionsCommand(ClientBasic* client, const BSONObj& cmdObj);
 
 
-} // namespace auth
-} // namespace mongo
+}  // namespace auth
+}  // namespace mongo

@@ -45,11 +45,10 @@ DB.prototype.commandHelp = function( name ){
 }
 
  // utility to attach readPreference if needed.
- DB.prototype._attachReadPreferenceToCommand = function (cmdObj) {
+ DB.prototype._attachReadPreferenceToCommand = function (cmdObj, readPref) {
      "use strict";
-     var readPref = this.getMongo().getReadPref();
      // if the user has not set a readpref, return the original cmdObj
-     if (readPref === null) {
+     if ((readPref === null) || typeof(readPref) !== "object") {
          return cmdObj;
      }
 
@@ -86,21 +85,24 @@ DB.prototype.commandHelp = function( name ){
  };
 
  // Like runCommand but applies readPreference if one has been set
- // on the connection. Also sets options automatically.
+ // on the connection. Also sets slaveOk if a (non-primary) readPref has been set.
  DB.prototype.runReadCommand = function (obj, extra) {
      "use strict";
 
+     // Support users who call this function with a string commandName, e.g.
+     // db.runReadCommand("commandName", {arg1: "value", arg2: "value"}).
      var mergedObj = (typeof(obj) === "string") ? this._mergeCommandOptions(obj, extra) : obj;
-     var cmdObjWithReadPref = this._attachReadPreferenceToCommand(obj);
+     var cmdObjWithReadPref =
+         this._attachReadPreferenceToCommand(mergedObj,
+                                             this.getMongo().getReadPref());
 
      var options = 0;
-     // automatically set slaveOk if readPreference is anything but primary
+     // We automatically set slaveOk if readPreference is anything but primary.
      if (this.getMongo().getReadPrefMode() !== "primary") {
          options |= 4;
      }
 
-     // allow options to be overridden
-     // extra is not used since mergedObj is an object
+     // The 'extra' parameter is not used as we have already created a merged command object.
      return this.runCommand(cmdObjWithReadPref, null, options);
  };
 
@@ -408,7 +410,8 @@ DB.prototype.help = function() {
     print("\tdb.fsyncLock() flush data to disk and lock server for backups");
     print("\tdb.fsyncUnlock() unlocks server following a db.fsyncLock()");
     print("\tdb.getCollection(cname) same as db['cname'] or db.cname");
-    print("\tdb.getCollectionInfos()");
+    print("\tdb.getCollectionInfos([filter]) - returns a list that contains the names and options"
+          + " of the db's collections");
     print("\tdb.getCollectionNames()");
     print("\tdb.getLastError() - just returns the err msg string");
     print("\tdb.getLastErrorObj() - return full status object");
@@ -684,19 +687,29 @@ DB.prototype.getPrevError = function(){
     return this.runCommand( { getpreverror : 1 } );
 }
 
-DB.prototype._getCollectionInfosSystemNamespaces = function(){
+DB.prototype._getCollectionInfosSystemNamespaces = function(filter) {
     var all = [];
 
-    var nsLength = this._name.length + 1;
-    
-    var c = this.getCollection( "system.namespaces" ).find();
+    var dbNamePrefix = this._name + ".";
+
+    // Create a shallow copy of 'filter' in case we modify its 'name' property. Also defaults
+    // 'filter' to {} if the parameter was not specified.
+    filter = Object.extend({}, filter);
+    if (typeof filter.name === "string") {
+        // Queries on the 'name' field need to qualify the namespace with the database name for
+        // consistency with the command variant.
+        filter.name = dbNamePrefix + filter.name;
+    }
+
+    var c = this.getCollection( "system.namespaces" ).find(filter);
     while ( c.hasNext() ){
         var infoObj = c.next();
         
         if ( infoObj.name.indexOf( "$" ) >= 0 && infoObj.name.indexOf( ".oplog.$" ) < 0 )
             continue;
         
-        infoObj.name = infoObj.name.substring( nsLength );
+        // Remove the database name prefix from the collection info object.
+        infoObj.name = infoObj.name.substring(dbNamePrefix.length);
 
         all.push( infoObj );
     }
@@ -706,8 +719,9 @@ DB.prototype._getCollectionInfosSystemNamespaces = function(){
 }
 
 
-DB.prototype._getCollectionInfosCommand = function() {
-    var res = this.runCommand( "listCollections" );
+DB.prototype._getCollectionInfosCommand = function(filter) {
+    filter = filter || {};
+    var res = this.runCommand({listCollections: 1, filter: filter});
     if ( res.code == 59 ) {
         // command doesn't exist, old mongod
         return null;
@@ -727,14 +741,16 @@ DB.prototype._getCollectionInfosCommand = function() {
 }
 
 /**
- * Returns this database's list of collection metadata objects, sorted by collection name.
+ * Returns a list that contains the names and options of this database's collections, sorted by
+ * collection name. An optional filter can be specified to match only collections with certain
+ * metadata.
  */
-DB.prototype.getCollectionInfos = function() {
-    var res = this._getCollectionInfosCommand();
+DB.prototype.getCollectionInfos = function(filter) {
+    var res = this._getCollectionInfosCommand(filter);
     if ( res ) {
         return res;
     }
-    return this._getCollectionInfosSystemNamespaces();
+    return this._getCollectionInfosSystemNamespaces(filter);
 }
 
 /**
@@ -890,7 +906,12 @@ DB.prototype.getReplicationInfo = function() {
 DB.prototype.printReplicationInfo = function() {
     var result = this.getReplicationInfo();
     if( result.errmsg ) {
-        if (!this.isMaster().ismaster) {
+        var isMaster = this.isMaster();
+        if (isMaster.arbiterOnly) {
+            print("cannot provide replication status from an arbiter.");
+            return;
+        }
+        else if (!isMaster.ismaster) {
             print("this is a slave, printing slave replication info.");
             this.printSlaveReplicationInfo();
             return;

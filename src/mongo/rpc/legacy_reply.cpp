@@ -31,52 +31,81 @@
 #include "mongo/rpc/legacy_reply.h"
 
 #include <utility>
+#include <tuple>
 
+#include "mongo/rpc/legacy_reply_builder.h"
+#include "mongo/rpc/metadata.h"
 #include "mongo/util/assert_util.h"
 #include "mongo/util/mongoutils/str.h"
 
 namespace mongo {
 namespace rpc {
 
-    LegacyReply::LegacyReply(const Message* message)
-        : _message(std::move(message)) {
-        invariant(message->operation() == opReply);
+LegacyReply::LegacyReply(const Message* message) : _message(std::move(message)) {
+    invariant(message->operation() == opReply);
 
-        QueryResult::View qr = _message->singleData().view2ptr();
+    QueryResult::View qr = _message->singleData().view2ptr();
 
-        // should be checked by caller.
-        invariant(qr.msgdata().getOperation() == opReply);
+    // should be checked by caller.
+    invariant(qr.msgdata().getOperation() == opReply);
 
-        uassert(ErrorCodes::BadValue,
-                str::stream() << "Got legacy command reply with a bad cursorId field,"
-                              << " expected a value of 0 but got " << qr.getCursorId(),
-                qr.getCursorId() == 0);
+    uassert(ErrorCodes::BadValue,
+            str::stream() << "Got legacy command reply with a bad cursorId field,"
+                          << " expected a value of 0 but got " << qr.getCursorId(),
+            qr.getCursorId() == 0);
 
-        uassert(ErrorCodes::BadValue,
-                str::stream() << "Got legacy command reply with a bad nReturned field,"
-                              << " expected a value of 1 but got " << qr.getNReturned(),
-                qr.getNReturned() == 1);
+    uassert(ErrorCodes::BadValue,
+            str::stream() << "Got legacy command reply with a bad nReturned field,"
+                          << " expected a value of 1 but got " << qr.getNReturned(),
+            qr.getNReturned() == 1);
 
-        uassert(ErrorCodes::BadValue,
-                str::stream() << "Got legacy command reply with a bad startingFrom field,"
-                              << " expected a value of 0 but got " << qr.getStartingFrom(),
-                qr.getStartingFrom() == 0);
-        // TODO bson validation
-        _commandReply = BSONObj(qr.data());
+    uassert(ErrorCodes::BadValue,
+            str::stream() << "Got legacy command reply with a bad startingFrom field,"
+                          << " expected a value of 0 but got " << qr.getStartingFrom(),
+            qr.getStartingFrom() == 0);
+
+    std::tie(_commandReply, _metadata) =
+        uassertStatusOK(rpc::upconvertReplyMetadata(BSONObj(qr.data())));
+
+    // Copy the bson array of documents from the message into
+    // a contiguous area of memory owned by _docBuffer so
+    // DocumentRange can be used to iterate over documents
+    auto cursorElem = _commandReply[LegacyReplyBuilder::kCursorTag];
+    if (cursorElem.eoo())
+        return;
+
+    BSONObj cursorObj = cursorElem.Obj();
+    auto firstBatchElem = cursorObj[LegacyReplyBuilder::kFirstBatchTag];
+    if (firstBatchElem.eoo())
+        return;
+
+    for (BSONObjIterator it(firstBatchElem.Obj()); it.more(); it.next()) {
+        invariant((*it).isABSONObj());
+        BSONObj doc = (*it).Obj();
+        doc.appendSelfToBufBuilder(_docBuffer);
     }
+    const char* dataBegin = _docBuffer.buf();
+    const char* dataEnd = dataBegin + _docBuffer.len();
+    _outputDocs = DocumentRange(dataBegin, dataEnd);
 
-    const BSONObj& LegacyReply::getMetadata() const {
-        return _metadataPlaceholder;
-    }
+    return;
+}
 
-    const BSONObj& LegacyReply::getCommandReply() const {
-        return _commandReply;
-    }
+const BSONObj& LegacyReply::getMetadata() const {
+    return _metadata;
+}
 
-    DocumentRange LegacyReply::getOutputDocs() const {
-        // return empty range
-        return DocumentRange{};
-    }
+const BSONObj& LegacyReply::getCommandReply() const {
+    return _commandReply;
+}
+
+DocumentRange LegacyReply::getOutputDocs() const {
+    return _outputDocs;
+}
+
+Protocol LegacyReply::getProtocol() const {
+    return rpc::Protocol::kOpQuery;
+}
 
 }  // namespace rpc
 }  // namespace mongo

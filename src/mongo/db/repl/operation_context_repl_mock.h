@@ -28,54 +28,46 @@
 
 #pragma once
 
-#include <boost/scoped_ptr.hpp>
 
 #include "mongo/db/operation_context_noop.h"
 
 namespace mongo {
 
-    class Locker;
+class Locker;
 
 namespace repl {
 
-    /**
-     * Mock implementation of OperationContext that can be used with real instances of LockManager.
-     * Note this is not thread safe and the setter methods should only be called in the context
-     * where access to this object is guaranteed to be serialized.
-     */
-    class OperationContextReplMock : public OperationContextNoop {
-    public:
-        OperationContextReplMock();
-        virtual ~OperationContextReplMock();
+/**
+ * Mock implementation of OperationContext that can be used with real instances of LockManager.
+ * Note this is not thread safe and the setter methods should only be called in the context
+ * where access to this object is guaranteed to be serialized.
+ */
+class OperationContextReplMock : public OperationContextNoop {
+public:
+    OperationContextReplMock();
+    explicit OperationContextReplMock(unsigned int opNum);
+    OperationContextReplMock(Client* client, unsigned int opNum);
+    virtual ~OperationContextReplMock();
 
-        virtual Locker* lockState() const override;
+    virtual void checkForInterrupt() override;
 
-        virtual unsigned int getOpID() const override;
+    virtual Status checkForInterruptNoAssert() override;
 
-        void setOpID(unsigned int opID);
+    void setCheckForInterruptStatus(Status status);
 
-        virtual void checkForInterrupt() const override;
+    virtual uint64_t getRemainingMaxTimeMicros() const override;
 
-        virtual Status checkForInterruptNoAssert() const override;
+    void setRemainingMaxTimeMicros(uint64_t micros);
 
-        void setCheckForInterruptStatus(Status status);
+    void setReplicatedWrites(bool writesAreReplicated = true) override;
 
-        virtual uint64_t getRemainingMaxTimeMicros() const override;
+    bool writesAreReplicated() const override;
 
-        void setRemainingMaxTimeMicros(uint64_t micros);
-
-        void setReplicatedWrites(bool writesAreReplicated = true) override;
-
-        bool writesAreReplicated() const override;
-
-    private:
-        boost::scoped_ptr<Locker> _lockState;
-        unsigned int _opID;
-
-        Status _checkForInterruptStatus;
-        uint64_t _maxTimeMicrosRemaining;
-        bool _writesAreReplicated;
-    };
+private:
+    Status _checkForInterruptStatus;
+    uint64_t _maxTimeMicrosRemaining;
+    bool _writesAreReplicated;
+};
 
 }  // namespace repl
 }  // namespace mongo

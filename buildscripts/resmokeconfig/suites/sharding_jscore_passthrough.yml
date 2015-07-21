@@ -18,7 +18,6 @@ selector:
     - jstests/core/auth2.js
     - jstests/core/dropdb_race.js
     # These tests might be fixed under sharding:
-    - jstests/core/apply_ops[12].js  # SERVER-1439
     - jstests/core/count5.js  # SERVER-1444
     - jstests/core/or4.js  # SERVER-1444
     - jstests/core/shellkillop.js  # SERVER-1445
@@ -27,6 +26,7 @@ selector:
     - jstests/core/fts_querylang.js  # SERVER-9063
     - jstests/core/fts_projection.js
     # Theses tests should not be run under sharding:
+    - jstests/core/apply_ops*.js  # SERVER-1439
     - jstests/core/dbadmin.js
     - jstests/core/fsync.js  # Isn't supported through mongos.
     - jstests/core/geo*.js
@@ -47,6 +47,11 @@ selector:
     - jstests/core/dbcase2.js  # SERVER-11735
     # TODO: SERVER-17284 remove once find cmd is implemented in mongos
     - jstests/core/read_after_optime.js
+    - jstests/core/find_getmore_bsonsize.js
+    - jstests/core/find_getmore_cmd.js
+    # TODO: SERVER-18292 remove once OP_COMMAND is implemented in mongos
+    - jstests/core/invalid_db_name.js
+    - jstests/core/validate_cmd_ns.js
 
 executor:
   js_test:

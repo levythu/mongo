@@ -33,47 +33,47 @@
 
 namespace mongo {
 
-    using boost::intrusive_ptr;
+using boost::intrusive_ptr;
 
-    void AccumulatorMinMax::processInternal(const Value& input, bool merging) {
-        // nullish values should have no impact on result
-        if (!input.nullish()) {
-            /* compare with the current value; swap if appropriate */
-            int cmp = Value::compare(_val, input) * _sense;
-            if (cmp > 0 || _val.missing()) { // missing is lower than all other values
-                _val = input;
-                _memUsageBytes = sizeof(*this) + input.getApproximateSize() - sizeof(Value);
-            }
+REGISTER_ACCUMULATOR(max, AccumulatorMinMax::createMax);
+REGISTER_ACCUMULATOR(min, AccumulatorMinMax::createMin);
+
+const char* AccumulatorMinMax::getOpName() const {
+    if (_sense == 1)
+        return "$min";
+    return "$max";
+}
+
+void AccumulatorMinMax::processInternal(const Value& input, bool merging) {
+    // nullish values should have no impact on result
+    if (!input.nullish()) {
+        /* compare with the current value; swap if appropriate */
+        int cmp = Value::compare(_val, input) * _sense;
+        if (cmp > 0 || _val.missing()) {  // missing is lower than all other values
+            _val = input;
+            _memUsageBytes = sizeof(*this) + input.getApproximateSize() - sizeof(Value);
         }
     }
+}
 
-    Value AccumulatorMinMax::getValue(bool toBeMerged) const {
-        return _val;
-    }
+Value AccumulatorMinMax::getValue(bool toBeMerged) const {
+    return _val;
+}
 
-    AccumulatorMinMax::AccumulatorMinMax(int theSense)
-        :_sense(theSense)
-    {
-        verify((_sense == 1) || (_sense == -1));
-        _memUsageBytes = sizeof(*this);
-    }
+AccumulatorMinMax::AccumulatorMinMax(Sense sense) : _sense(sense) {
+    _memUsageBytes = sizeof(*this);
+}
 
-    void AccumulatorMinMax::reset() {
-        _val = Value();
-        _memUsageBytes = sizeof(*this);
-    }
+void AccumulatorMinMax::reset() {
+    _val = Value();
+    _memUsageBytes = sizeof(*this);
+}
 
-    intrusive_ptr<Accumulator> AccumulatorMinMax::createMin() {
-        return new AccumulatorMinMax(1);
-    }
+intrusive_ptr<Accumulator> AccumulatorMinMax::createMin() {
+    return new AccumulatorMinMax(Sense::MIN);
+}
 
-    intrusive_ptr<Accumulator> AccumulatorMinMax::createMax() {
-        return new AccumulatorMinMax(-1);
-    }
-
-    const char *AccumulatorMinMax::getOpName() const {
-        if (_sense == 1)
-            return "$min";
-        return "$max";
-    }
+intrusive_ptr<Accumulator> AccumulatorMinMax::createMax() {
+    return new AccumulatorMinMax(Sense::MAX);
+}
 }
